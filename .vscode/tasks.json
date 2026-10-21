@@ -1,0 +1,30 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "cmd",
+            "args": ["/c", "build.bat", "${input:demoTarget}"],
+            "group": { "kind": "build", "isDefault": true },
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        },
+        {
+            "label": "clean",
+            "type": "shell",
+            "command": "cmd",
+            "args": ["/c", "build.bat", "--clean", "${input:demoTarget}"],
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "demoTarget",
+            "type": "pickString",
+            "description": "选择 demo 目标",
+            "options": ["0_sdl_setup"]
+        }
+    ]
+}

@@ -27,7 +27,7 @@ cmake-build-*/
 *.pb
 
 # ---- IDE / OS ----
-.vscode/
+# 注：.vscode/ 保留提交（tasks.json / launch.json 是共享的构建·调试配置）
 .idea/
 .DS_Store
 Thumbs.db
