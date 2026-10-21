@@ -1,0 +1,41 @@
+# ---- Python (venv is local, never committed) ----
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ---- Third-party deps (downloaded by setup scripts) ----
+third_party/
+
+# ---- Build output ----
+build/
+cmake-build-*/
+*/build/
+*.o
+*.obj
+*.exe
+*.dll
+*.a
+*.so
+*.dylib
+
+# ---- Model artifacts (regenerate via scripts) ----
+*.tflite
+*.h5
+*.keras
+*.weights.h5
+*.pb
+
+# ---- IDE / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- Local machine artifacts ----
+.acl-recovery/
+.tmp/
+
+# ---- TF / matplotlib temp clutter ----
+tmp*/
+matplotlib-*/

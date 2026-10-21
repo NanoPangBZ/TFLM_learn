@@ -1,0 +1,5 @@
+# Tested on Python 3.13. Wheels exist for Python 3.10 - 3.13,
+# so other devices with a different 3.x will resolve the same pinned versions.
+tensorflow==2.21.0
+numpy==2.5.4
+matplotlib==3.11.2
