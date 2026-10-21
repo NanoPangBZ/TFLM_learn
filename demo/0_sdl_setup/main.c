@@ -1,6 +1,7 @@
 /* Demo 0 — SDL3 全像素画板：左键画 / 右键擦 / C 清空 / ESC 退出 */
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+#include <SDL3_ttf/SDL_ttf.h>
 #include <stdint.h>
 
 #define FB_W 320
@@ -11,7 +12,6 @@
 #define RGBA(r, g, b, a) ((uint32_t)(a) | ((uint32_t)(b) << 8) | ((uint32_t)(g) << 16) | ((uint32_t)(r) << 24))
 #define COLOR_BG   RGBA(40, 40, 60, 255)
 #define COLOR_INK  RGBA(240, 200, 80, 255)
-#define COLOR_HINT RGBA(190, 190, 210, 255)
 
 static uint32_t fb[FB_W * FB_H];
 
@@ -43,66 +43,16 @@ static void fb_stroke(int x0, int y0, int x1, int y1, int r, uint32_t c)
         fb_brush(x0 + dx * i / steps, y0 + dy * i / steps, r, c);
 }
 
-/* 5x7 点阵字，与 FONT_CHARS 顺序对应，每字节低 5 位为一行 */
-static const char FONT_CHARS[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ:";
-static const uint8_t FONT_GLYPHS[][7] = {
-    {0x00,0x00,0x00,0x00,0x00,0x00,0x00},
-    {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11},
-    {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E},
-    {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E},
-    {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E},
-    {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F},
-    {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10},
-    {0x0E,0x11,0x10,0x17,0x11,0x11,0x0F},
-    {0x11,0x11,0x11,0x1F,0x11,0x11,0x11},
-    {0x1F,0x04,0x04,0x04,0x04,0x04,0x1F},
-    {0x07,0x02,0x02,0x02,0x02,0x12,0x0C},
-    {0x11,0x12,0x14,0x18,0x14,0x12,0x11},
-    {0x10,0x10,0x10,0x10,0x10,0x10,0x1F},
-    {0x11,0x1B,0x15,0x15,0x11,0x11,0x11},
-    {0x11,0x19,0x15,0x13,0x11,0x11,0x11},
-    {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E},
-    {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10},
-    {0x0E,0x11,0x11,0x11,0x15,0x12,0x0D},
-    {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11},
-    {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E},
-    {0x1F,0x04,0x04,0x04,0x04,0x04,0x04},
-    {0x11,0x11,0x11,0x11,0x11,0x11,0x0E},
-    {0x11,0x11,0x11,0x11,0x11,0x0A,0x04},
-    {0x11,0x11,0x11,0x15,0x15,0x1B,0x11},
-    {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11},
-    {0x11,0x11,0x0A,0x04,0x04,0x04,0x04},
-    {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F},
-    {0x00,0x0C,0x0C,0x00,0x0C,0x0C,0x00},
-};
-
-static const uint8_t *font_glyph(char c)
-{
-    if (c >= 'a' && c <= 'z') c -= 32;
-    for (int i = 0; FONT_CHARS[i]; i++)
-        if (FONT_CHARS[i] == c) return FONT_GLYPHS[i];
-    return FONT_GLYPHS[0];
-}
-
-static void fb_text(int x, int y, const char *s, uint32_t c, int scale)
-{
-    while (*s) {
-        const uint8_t *g = font_glyph(*s++);
-        for (int row = 0; row < 7; row++)
-            for (int col = 0; col < 5; col++)
-                if (g[row] & (1u << (4 - col)))
-                    for (int sy = 0; sy < scale; sy++)
-                        for (int sx = 0; sx < scale; sx++)
-                            fb_put(x + col * scale + sx, y + row * scale + sy, c);
-        x += 6 * scale;
-    }
-}
-
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
 
     if (!SDL_Init(SDL_INIT_VIDEO)) { SDL_Log("%s", SDL_GetError()); return 1; }
+    if (!TTF_Init()) { SDL_Log("%s", SDL_GetError()); return 1; }
+
+    int fmaj, fmin, fpat;
+    TTF_GetFreeTypeVersion(&fmaj, &fmin, &fpat);
+    SDL_Log("FreeType %d.%d.%d", fmaj, fmin, fpat);
 
     SDL_Window *win = SDL_CreateWindow("SDL3 全像素画板", FB_W, FB_H, 0);
     SDL_Renderer *ren = win ? SDL_CreateRenderer(win, NULL) : NULL;
@@ -111,6 +61,21 @@ int main(int argc, char **argv)
     if (!tex) { SDL_Log("%s", SDL_GetError()); goto done; }
 
     fb_clear();
+
+    /* 文字提示：SDL3_ttf 渲染一次，每帧叠在画布底部 */
+    char path[512];
+    SDL_snprintf(path, sizeof(path), "%sDejaVuSans.ttf", SDL_GetBasePath());
+    TTF_Font *font = TTF_OpenFont(path, 14.0f);
+    SDL_Color fg = {190, 190, 210, 255};
+    SDL_Surface *surf = font ? TTF_RenderText_Blended(font, "L: draw  R: erase  C: clear  Esc: quit",
+                                                      SDL_strlen("L: draw  R: erase  C: clear  Esc: quit"), fg) : NULL;
+    SDL_Texture *htex = surf ? SDL_CreateTextureFromSurface(ren, surf) : NULL;
+    SDL_FRect hdst = {2.0f, 2.0f, 0.0f, 0.0f};
+    if (htex) {
+        hdst.y = (float)(FB_H - surf->h - 4);
+        hdst.w = (float)surf->w;
+        hdst.h = (float)surf->h;
+    }
 
     int running = 1, mouse_down = 0, prev_x = 0, prev_y = 0;
     uint32_t color = COLOR_INK;
@@ -150,17 +115,21 @@ int main(int argc, char **argv)
             }
         }
 
-        fb_text(2, FB_H - 8, "L:DRAW R:ERASE C:CLEAR ESC:QUIT", COLOR_HINT, 1);
         SDL_UpdateTexture(tex, NULL, fb, FB_W * (int)sizeof(uint32_t));
         SDL_RenderTexture(ren, tex, NULL, NULL);
+        if (htex) SDL_RenderTexture(ren, htex, NULL, &hdst);
         SDL_RenderPresent(ren);
         SDL_Delay(16);
     }
 
 done:
+    if (htex) SDL_DestroyTexture(htex);
+    if (surf) SDL_DestroySurface(surf);
+    if (font) TTF_CloseFont(font);
     if (tex) SDL_DestroyTexture(tex);
     if (ren) SDL_DestroyRenderer(ren);
     if (win) SDL_DestroyWindow(win);
+    TTF_Quit();
     SDL_Quit();
     return 0;
 }

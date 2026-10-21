@@ -34,7 +34,7 @@ bash setup.sh
 `setup` 脚本**只在本仓库内安装，不污染系统**：
 
 - `.venv/` — Python 虚拟环境（TensorFlow、NumPy、Matplotlib），系统 Python 本身不动。
-- `third_party/SDL3/` — SDL3 开发包，由 `scripts/fetch_sdl3.py` 自动下载解压。
+- `third_party/` — SDL3、SDL3_ttf（内置 FreeType）和字体，由 `scripts/fetch_deps.py` 自动下载。
 
 两者都在 `.gitignore` 里，不随仓库提交；换一台机器 `git clone` 后重新跑脚本即可复现。
 
@@ -63,16 +63,16 @@ TFLM_learn/
 ├── cmake/
 │   └── sdl3.cmake         # 共享的 SDL3 定位 / 链接 helper
 ├── scripts/
-│   ├── fetch_sdl3.py      # 下载并解压 SDL3 到 third_party/
+│   ├── fetch_deps.py      # 下载 SDL3 / SDL3_ttf / 字体到 third_party/
 │   └── build.py           # build.bat 背后的交互式构建菜单
 ├── .vscode/               # VS Code 任务与调试配置（tasks.json / launch.json）
 ├── demo/                  # 学习项目
-│   └── 0_sdl_setup/       # SDL3 画布（28×28 网格，含示例 pre_build.py）
+│   └── 0_sdl_setup/       # SDL3 全像素画板（含示例 pre_build.py）
 ├── verify/                # 安装验证冒烟测试
 │   ├── 01_tensorflow_smoke.py
 │   └── 02_sdl3_smoke/
 ├── .venv/                 # （不提交）本地虚拟环境
-└── third_party/           # （不提交）SDL3 开发包
+└── third_party/           # （不提交）SDL3 / SDL3_ttf / 字体
 ```
 
 ## 构建 demo
@@ -127,4 +127,4 @@ C++ 侧推理有两条路径，建议都体验：
 
 - Python 3.13（wheels 覆盖 3.10–3.13）
 - TensorFlow 2.21.0 · NumPy 2.5.4 · Matplotlib 3.11.2
-- SDL3 3.4.18
+- SDL3 3.4.18 · SDL3_ttf 3.2.2（内置 FreeType 2.13.2）

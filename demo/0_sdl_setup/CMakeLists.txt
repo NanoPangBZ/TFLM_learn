@@ -7,6 +7,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/sdl3.cmake")
 
 add_executable(0_sdl_setup main.c)
 sdl3_attach(0_sdl_setup)
+sdl3_ttf_attach(0_sdl_setup)
 
 # 开启警告 + 调试信息（-g 生成符号表，F5 断点调试必需；-O0 关闭优化，便于单步）。
 if(MSVC)

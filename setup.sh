@@ -29,11 +29,11 @@ echo "==> Virtual environment ready: .venv"
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements.txt
 
-# ---- 4. SDL3 (system package manager preferred) ----
+# ---- 4. SDL3 / SDL3_ttf (system package manager preferred) ----
 if ! command -v sdl3-config >/dev/null 2>&1; then
-    echo "NOTE: install SDL3 with your package manager:"
-    echo "  sudo apt install libsdl3-dev   # Debian/Ubuntu"
-    echo "  brew install sdl3              # macOS"
+    echo "NOTE: install SDL3 / SDL3_ttf with your package manager:"
+    echo "  sudo apt install libsdl3-dev libsdl3-ttf-dev   # Debian/Ubuntu"
+    echo "  brew install sdl3 sdl3_ttf                    # macOS"
 fi
 
 echo ""

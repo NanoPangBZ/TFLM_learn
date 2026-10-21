@@ -51,8 +51,8 @@ Write-Host "==> Virtual environment ready: $venvDir"
 & $venvPy -m pip install --upgrade pip
 & $venvPy -m pip install -r (Join-Path $PSScriptRoot 'requirements.txt')
 
-# ---- 4. Vendor SDL3 into third_party (no system install) ----
-& $venvPy (Join-Path $PSScriptRoot 'scripts\fetch_sdl3.py')
+# ---- 4. Vendor SDL3 / SDL3_ttf / 字体 into third_party (no system install) ----
+& $venvPy (Join-Path $PSScriptRoot 'scripts\fetch_deps.py')
 
 Write-Host ""
 Write-Host "==> Environment ready. Installed:"
