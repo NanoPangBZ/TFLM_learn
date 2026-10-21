@@ -57,17 +57,32 @@ verify\02_sdl3_smoke\build\sdl3_smoke.exe
 
 ```
 TFLM_learn/
-├── setup.ps1              # Windows 一键安装（首选）
-├── setup.sh               # Linux/macOS 一键安装
+├── setup.ps1 / setup.sh   # 一键安装环境（首选）
+├── build.bat              # 构建 demo/ 下的目标（交互菜单，委托 scripts/build.py）
 ├── requirements.txt       # Python 依赖（已锁定版本）
+├── cmake/
+│   └── sdl3.cmake         # 共享的 SDL3 定位 / 链接 helper
 ├── scripts/
-│   └── fetch_sdl3.py      # 下载并解压 SDL3 到 third_party/（跨平台，stdlib only）
-├── verify/
-│   ├── 01_tensorflow_smoke.py   # TF 训练 + int8 量化 + 推理冒烟测试
-│   └── 02_sdl3_smoke/           # SDL3 窗口冒烟测试（C + CMake）
+│   ├── fetch_sdl3.py      # 下载并解压 SDL3 到 third_party/
+│   └── build.py           # build.bat 背后的交互式构建菜单
+├── demo/                  # 学习项目
+│   └── 0_sdl_setup/       # SDL3 画布（28×28 网格）
+├── verify/                # 安装验证冒烟测试
+│   ├── 01_tensorflow_smoke.py
+│   └── 02_sdl3_smoke/
 ├── .venv/                 # （不提交）本地虚拟环境
 └── third_party/           # （不提交）SDL3 开发包
 ```
+
+## 构建 demo
+
+```bat
+build.bat                 rem 交互菜单选择目标
+build.bat 0_sdl_setup     rem 直接构建指定目标
+```
+
+脚本会自动选择生成器（优先 MinGW，否则交给 CMake 自动选 MSVC/Ninja），
+构建产物输出到 `demo/<目标>/build/`。
 
 ## 学习路线（下一步）
 
