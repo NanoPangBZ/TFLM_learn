@@ -24,17 +24,23 @@ int main(int argc, char* argv[])
     (void)argc;
     (void)argv;
 
-    /* 框架只使用 SDL 线程/互斥/信号量/定时，无需视频子系统；
-     * 调用 SDL_Init(0) 以规范化底层状态。 */
-    SDL_Init(0);
+    /* 初始化视频（bsp_display 独立窗口）+ 事件（窗口关闭等）子系统 */
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
 
     /* 进入框架：堆初始化 -> 各层级模块初始化 -> 启动调度器（SDL 线程） */
     enter_framework(log_out);
 
-    /* 框架任务已在后台线程运行；本线程保持存活。
-     * 后续可在 SDL 事件循环中接入窗口/画板等外设模拟。 */
+    /* 框架任务在后台线程运行；本线程泵事件保持窗口响应，
+     * 窗口关闭（SDL_EVENT_QUIT）时退出框架并结束进程。 */
     for (;;) {
-        SDL_Delay(1000);
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) {
+                exit_framework();
+                return 0;
+            }
+        }
+        SDL_Delay(16);
     }
 
     return 0;

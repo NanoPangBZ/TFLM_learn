@@ -21,7 +21,7 @@ extern SDL_Mutex* e_critical_mutex_get(void);
 
 /**************************堆内存配置****************************************/
 /* 默认堆，必须配置 */
-#define E_DEFAULT_HEAP_SIZE             (256 * 1024)                       // 256KB heap size
+#define E_DEFAULT_HEAP_SIZE             (1024 * 1024)                       // 1MB heap size（需容纳 bsp_display 帧缓冲等）
 #define E_DEFAULT_HEAP_MEM_ATTR         __attribute__((aligned(16)))
 #define E_DEFAULT_HEAP_ALIGN_SIZE       16
 

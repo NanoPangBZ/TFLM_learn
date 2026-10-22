@@ -53,6 +53,12 @@ set(FRAMEWORK_SOURCES
 
     # ---- lib / symbol_table ----
     src/lib/symbol_table/symbol_table.c
+
+    # ---- bsp ----
+    src/bsp/private/sdl/bsp_display_sdl.c
+
+    # ---- test ----
+    src/test/bsp_display/bsp_display_test.c
 )
 
 add_executable(tflm_framework ${FRAMEWORK_SOURCES})
