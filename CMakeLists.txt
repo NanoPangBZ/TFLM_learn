@@ -58,10 +58,12 @@ set(FRAMEWORK_SOURCES
     src/arch/private/sdl/arch_init.c
 
     # ---- bsp ----
-    # src/bsp/private/sdl/bsp_display_sdl.c
+    src/bsp/private/sdl/bsp_display_sdl.c
+    src/bsp/private/sdl/bsp_touch_sdl.c
 
     # ---- test ----
-    # src/test/bsp_display/bsp_display_test.c
+    src/test/bsp_display/bsp_display_test.c
+    src/test/bsp_touch/bsp_touch_test.c
 )
 
 add_executable(tflm_framework ${FRAMEWORK_SOURCES})
