@@ -61,9 +61,13 @@ set(FRAMEWORK_SOURCES
     src/bsp/private/sdl/bsp_display_sdl.c
     src/bsp/private/sdl/bsp_touch_sdl.c
 
+    # ---- service ----
+    src/service/canvas/canvas_service.c
+
     # ---- test ----
-    src/test/bsp_display/bsp_display_test.c
-    src/test/bsp_touch/bsp_touch_test.c
+    # src/test/canvas_service/canvas_service_test.c
+    # src/test/bsp_display/bsp_display_test.c
+    # src/test/bsp_touch/bsp_touch_test.c
 )
 
 add_executable(tflm_framework ${FRAMEWORK_SOURCES})
