@@ -58,16 +58,21 @@ verify\02_sdl3_smoke\build\sdl3_smoke.exe
 ```
 TFLM_learn/
 ├── setup.ps1 / setup.sh   # 一键安装环境（首选）
-├── build.bat              # 构建 demo/ 下的目标（交互菜单，委托 scripts/build.py）
+├── build.bat              # 构建入口（debug / release，委托 scripts/build.py）
+├── CMakeLists.txt         # 根构建脚本（编译整个 src/）
 ├── requirements.txt       # Python 依赖（已锁定版本）
 ├── cmake/
 │   └── sdl3.cmake         # 共享的 SDL3 定位 / 链接 helper
 ├── scripts/
 │   ├── fetch_deps.py      # 下载 SDL3 / SDL3_ttf / 字体到 third_party/
-│   └── build.py           # build.bat 背后的交互式构建菜单
-├── .vscode/               # VS Code 任务与调试配置（tasks.json / launch.json）
-├── demo/                  # 学习项目
-│   └── 0_sdl_setup/       # SDL3 全像素画板（含示例 pre_build.py）
+│   └── build.py           # build.bat 背后的构建脚本（debug / release）
+├── .vscode/               # tasks.json + launch.json（F5 构建·调试）
+├── src/                   # 基础软件框架（镜像参考工程结构）
+│   ├── main.c             # 统一入口
+│   ├── framework_cfg.h    # SDL 后端配置
+│   ├── framework/         # 16 个接口头 + private/sdl 实现
+│   ├── lib/               # com_host / symbol_table
+│   └── app/               # 应用（app_demo.c 验证框架）
 ├── verify/                # 安装验证冒烟测试
 │   ├── 01_tensorflow_smoke.py
 │   └── 02_sdl3_smoke/
@@ -75,39 +80,27 @@ TFLM_learn/
 └── third_party/           # （不提交）SDL3 / SDL3_ttf / 字体
 ```
 
-## 构建 demo
+## 构建
 
 ```bat
-build.bat                 rem 方向键菜单选择目标
-build.bat 0_sdl_setup     rem 直接构建指定目标
+build.bat               rem 默认构建 debug
+build.bat debug         rem Debug（-g -O0，带调试符号）
+build.bat release       rem Release（-O2 -DNDEBUG）
+build.bat --clean debug rem 先清理再构建
 ```
 
-交互菜单用 **↑/↓** 移动高亮、**Enter** 构建、**Esc/Q** 退出（数字键可快速跳转）。
-脚本会自动选择生成器（优先 MinGW，否则交给 CMake 自动选 MSVC/Ninja），
-构建产物输出到 `demo/<目标>/build/`。
+编译整个 `src/` 框架，产物分别输出到 `build/debug/` 与 `build/release/`，
+可执行文件均为 `tflm_framework.exe`（SDL3.dll 由 CMake 自动拷贝到产物目录）。
+脚本自动选择生成器（优先 MinGW，否则交给 CMake 自动选 MSVC/Ninja）。
 
-### 编译前脚本（可选）
-
-每个 demo 可在自身目录放一个「编译前脚本」，`build.py` 会在 cmake 之前自动运行：
-
-- `pre_build.py` —— 跨平台（首选，用当前 .venv 的 Python 运行）
-- `pre_build.ps1` —— 仅 Windows
-- `pre_build.sh` —— 仅 Linux/macOS
-
-典型用途：训练模型 → 导出 `.tflite` → 转成 C 头文件数组，供 C++ demo 编译进去。
-`demo/0_sdl_setup/pre_build.py` 是一个最小示例（仅打印，演示钩子）。
-
-## VS Code 调试
+## VS Code / Cursor 调试
 
 已内置 `.vscode/tasks.json` 和 `.vscode/launch.json`：
 
-- **Ctrl+Shift+B** —— 构建（选择 demo 目标）
-- **F5** —— 用 gdb 调试 `demo/<目标>/build/<目标>.exe`
+- **Ctrl+Shift+B** —— 构建 debug（默认构建任务）
+- **F5** —— 自动构建 debug 后用 gdb 调试 `build/debug/tflm_framework.exe`
 
-调试前请先 Ctrl+Shift+B 构建（F5 不再自动构建，避免目标重复弹两次选择）。
-各 demo 默认以 `-g -O0` 编译（见 CMakeLists），带调试符号，可正常打断点。
-
-约定：**可执行文件名 = demo 目录名**（见各 demo 的 CMakeLists），这样调试路径能通用。
+Debug 目标以 `-g -O0` 编译，带调试符号可正常打断点。
 需要 Microsoft C/C++ 扩展（ms-vscode.cpptools），gdb 路径为 `C:\mingw64\bin\gdb.exe`。
 
 ## 学习路线（下一步）

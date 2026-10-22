@@ -2,29 +2,38 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "build",
+            "label": "build (debug)",
             "type": "shell",
             "command": "cmd",
-            "args": ["/c", "build.bat", "${input:demoTarget}"],
+            "args": ["/c", "build.bat", "debug"],
             "group": { "kind": "build", "isDefault": true },
             "presentation": { "reveal": "always", "panel": "shared" },
             "problemMatcher": []
         },
         {
-            "label": "clean",
+            "label": "build (release)",
             "type": "shell",
             "command": "cmd",
-            "args": ["/c", "build.bat", "--clean", "${input:demoTarget}"],
+            "args": ["/c", "build.bat", "release"],
+            "group": "build",
             "presentation": { "reveal": "always", "panel": "shared" },
             "problemMatcher": []
-        }
-    ],
-    "inputs": [
+        },
         {
-            "id": "demoTarget",
-            "type": "pickString",
-            "description": "选择 demo 目标",
-            "options": ["0_sdl_setup"]
+            "label": "clean (debug)",
+            "type": "shell",
+            "command": "cmd",
+            "args": ["/c", "build.bat", "--clean", "debug"],
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        },
+        {
+            "label": "clean (release)",
+            "type": "shell",
+            "command": "cmd",
+            "args": ["/c", "build.bat", "--clean", "release"],
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
         }
     ]
 }

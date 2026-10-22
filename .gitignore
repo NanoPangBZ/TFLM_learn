@@ -19,6 +19,9 @@ cmake-build-*/
 *.so
 *.dylib
 
+# ---- 框架运行时数据（e_kv 文件后端） ----
+kv_data/
+
 # ---- Model artifacts (regenerate via scripts) ----
 *.tflite
 *.h5

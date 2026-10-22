@@ -22,36 +22,40 @@ bash setup.sh                                            rem Linux/macOS
 ## 构建 / 调试
 
 ```bat
-build.bat                rem 方向键菜单选 demo
-build.bat <目标>          rem 直接构建，如 build.bat 0_sdl_setup
-build.bat --clean <目标>  rem 先清理再构建
+build.bat               rem 默认构建 debug
+build.bat debug         rem Debug（-g -O0）
+build.bat release       rem Release（-O2 -DNDEBUG）
+build.bat --clean debug rem 先清理再构建
 ```
 
-- VS Code/Cursor：**Ctrl+Shift+B** 构建、**F5** 用 gdb 调试（`C:\mingw64\bin\gdb.exe`）。
+- 编译整个 `src/` 框架，产物在 `build/debug/` / `build/release/`，可执行文件 `tflm_framework.exe`（SDL3.dll 自动拷贝到产物目录）。
+- VS Code/Cursor：**Ctrl+Shift+B** 构建 debug、**F5** 自动构建后用 gdb 调试（`C:\mingw64\bin\gdb.exe`）。
 - 需要 Microsoft C/C++ 扩展（`ms-vscode.cpptools`）。
 
 ## 目录结构与约定
 
 ```
-scripts/
-  build.py        交互式构建（方向键菜单 / 预构建钩子 / --clean / TMP 重定向）
-  fetch_deps.py   下载第三方依赖到 third_party/
-cmake/sdl3.cmake  共享 SDL3 / SDL3_ttf 定位，提供 sdl3_attach() / sdl3_ttf_attach()
-demo/<name>/      每个 demo 一个目录（含 CMakeLists.txt 才被 build.py 识别）
-.vscode/          tasks.json + launch.json（共享的构建·调试配置）
+CMakeLists.txt       根构建脚本（编译整个 src/）
+build.bat            构建入口（debug / release，委托 scripts/build.py）
+scripts/build.py     构建脚本（debug / release / --clean / TMP 重定向）
+scripts/fetch_deps.py 下载第三方依赖到 third_party/
+cmake/sdl3.cmake     共享 SDL3 定位，提供 sdl3_attach() / sdl3_ttf_attach()
+src/                 框架源码（镜像参考工程结构，见 README）
+.vscode/             tasks.json + launch.json（F5 构建·调试）
 ```
 
-**约定（新增 demo 必须遵守）：**
-1. **可执行文件名 = demo 目录名**（见各 demo 的 CMakeLists），这样 launch.json 调试路径能通用。
-2. 每个 demo 可放 `pre_build.py` / `pre_build.ps1` / `pre_build.sh`，`build.py` 会在 cmake 前自动运行（用途：训练模型→导出 .tflite→转 C 头文件）。
-3. C 工程默认 `-g -O0`（调试符号 + 关优化），保证断点可用。
+**约定：**
+1. 框架源码在 `src/`，接口头在 `src/framework/*.h`，SDL 后端实现在 `src/framework/private/sdl/*.c`。
+2. 构建目标只有 `debug` / `release` 两个，可执行文件名固定为 `tflm_framework`（launch.json 按此定位）。
+3. Debug 默认 `-g -O0`（调试符号 + 关优化），保证断点可用。
+4. 在 `src/` 下新增源文件后，需在根 `CMakeLists.txt` 的 `FRAMEWORK_SOURCES` 中登记。
 
 ## 当前进度
 
 - [x] 环境搭建（TensorFlow 2.21.0 + SDL3 + SDL3_ttf，setup 一键复现）
-- [x] 构建系统（build.bat → build.py：方向键菜单、预构建钩子、--clean）
-- [x] VS Code/Cursor 构建 + gdb 调试配置
-- [x] demo 0：SDL3 全像素画板（RGBA8888 帧缓冲、左键画/右键擦、SDL3_ttf 文字提示）
+- [x] 基础软件框架（src/，镜像参考工程：16 个框架接口 + SDL3 后端实现）
+- [x] 构建系统（build.bat → build.py：debug / release 两个目标）
+- [x] VS Code/Cursor F5 构建 + gdb 调试配置
 - [ ] P1 正弦波：密集网络拟合 sin，int8 量化后 SDL 实时画「预测 vs 真值」
 - [ ] P2 MNIST：CNN + 画板实时识别手写数字
 
@@ -63,6 +67,9 @@ demo/<name>/      每个 demo 一个目录（含 CMakeLists.txt 才被 build.py 
 4. **鼠标连画断触**：`MOUSE_MOTION` 是离散采样，快速拖动会跳像素；要在相邻两点间插值盖章（`fb_stroke`）。
 5. **SDL3_ttf 静态内置 FreeType**：无需单独下载 freetype；`TTF_GetFreeTypeVersion()` 可验证。
 6. **调试符号**：不加 `-g` 的 exe 无法打断点。
+7. **MinGW PE 链接段注册不可用**：参考工程的 `__attribute__((section("__function_regedit")))` 段注册在 MinGW 下失效（`#pragma pack(1)`+位域导致不同编译单元 `sizeof(function_item_t)` 不一致、段按 16 字节对齐插入填充），框架改用 GCC 构造函数 + 静态注册表（`c_function_regedit_add`）等价实现，接口宏/结构体保持逐字一致。
+8. **SDL3 3.4.18 API 命名**：原子指针是 `void**` + `SDL_Get/SetAtomicPointer`（非 `SDL_AtomicPtr`）；线程优先级用 `SDL_SetCurrentThreadPriority`（非 `SDL_SetThreadPriority`）；优先级枚举只有 LOW/NORMAL/HIGH/TIME_CRITICAL。
+9. **e_mutex 用 SDL_Semaphore(1) 而非 SDL_Mutex**：SDL3 的 `SDL_Mutex` 是递归锁，为对齐参考的二值信号量（非递归）语义改用信号量。
 
 ## 已锁定版本
 

@@ -2,10 +2,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug demo (gdb)",
+            "name": "Debug framework (gdb)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/demo/${input:demoTarget}/build/${input:demoTarget}.exe",
+            "program": "${workspaceFolder}/build/debug/tflm_framework.exe",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -13,6 +13,7 @@
             "externalConsole": false,
             "MIMode": "gdb",
             "miDebuggerPath": "C:/mingw64/bin/gdb.exe",
+            "preLaunchTask": "build (debug)",
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
@@ -20,14 +21,6 @@
                     "ignoreFailures": true
                 }
             ]
-        }
-    ],
-    "inputs": [
-        {
-            "id": "demoTarget",
-            "type": "pickString",
-            "description": "选择 demo 目标",
-            "options": ["0_sdl_setup"]
         }
     ]
 }
