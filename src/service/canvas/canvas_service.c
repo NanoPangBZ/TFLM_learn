@@ -6,6 +6,7 @@
 #include "bsp/bsp_display.h"
 #include "bsp/bsp_touch.h"
 #include "framework/c_function_regedit.h"
+#include "framework/c_list.h"
 #include "framework/e_heap.h"
 #include "framework/e_polling_pool.h"
 #include "framework/e_sched.h"
@@ -19,6 +20,12 @@
 #define INFO_LOG(...)   E_INFO_LOG(TAG, __VA_ARGS__)
 #define WARN_LOG(...)   E_WARN_LOG(TAG, __VA_ARGS__)
 #define ERROR_LOG(...)  E_ERROR_LOG(TAG, __VA_ARGS__)
+
+/* 触发回调槽位（列表元素） */
+typedef struct canvas_service_trigger_slot_t {
+    canvas_service_trigger_callback_t cb;
+    void* ctx;
+} canvas_service_trigger_slot_t;
 
 typedef struct canvas_service_ctx_t {
     bsp_display_handle_t display;
@@ -38,8 +45,7 @@ typedef struct canvas_service_ctx_t {
     int16_t  last_y;
     uint32_t last_touch_ms;
 
-    canvas_service_trigger_callback_t trigger_cb;
-    void* trigger_ctx;
+    list_handle_t trigger_list;   /* 触发回调列表 */
 
     uint8_t enable      : 1;
     uint8_t has_content : 1;  /* 本笔划会话是否画过内容 */
@@ -157,8 +163,10 @@ static void canvas_fire_trigger(canvas_service_ctx_t* ctx)
              (unsigned)CANVAS_SERVICE_IDLE_TIMEOUT_MS,
              (unsigned)ctx->width, (unsigned)ctx->height);
 
-    if (ctx->trigger_cb) {
-        ctx->trigger_cb(&trigger, ctx->trigger_ctx);
+    foreach_list(ctx->trigger_list, slot, canvas_service_trigger_slot_t) {
+        if (slot->cb) {
+            slot->cb(&trigger, slot->ctx);
+        }
     }
 
     canvas_clear_screen(ctx);
@@ -228,8 +236,26 @@ uint8_t canvas_service_is_enabled(void)
 
 void canvas_service_register_trigger_callback(canvas_service_trigger_callback_t callback, void* ctx)
 {
-    g_canvas.trigger_cb = callback;
-    g_canvas.trigger_ctx = ctx;
+    if (!callback || !g_canvas.trigger_list) {
+        return;
+    }
+    canvas_service_trigger_slot_t slot = { .cb = callback, .ctx = ctx };
+    if (!list_add_element(g_canvas.trigger_list, &slot)) {
+        ERROR_LOG("add trigger callback failed");
+    }
+}
+
+void canvas_service_unregister_trigger_callback(canvas_service_trigger_callback_t callback)
+{
+    if (!callback || !g_canvas.trigger_list) {
+        return;
+    }
+    foreach_list(g_canvas.trigger_list, slot, canvas_service_trigger_slot_t) {
+        if (slot->cb == callback) {
+            list_remove_element(g_canvas.trigger_list, slot);
+            return;
+        }
+    }
 }
 
 static int canvas_service_init(void)
@@ -275,6 +301,12 @@ static int canvas_service_init(void)
     ctx->pen_color565 = rgb888_to_rgb565(CANVAS_SERVICE_PEN_COLOR);
     ctx->pen_radius = (uint8_t)CANVAS_SERVICE_PEN_RADIUS;
     ctx->enable = 1;
+
+    ctx->trigger_list = list_create(sizeof(canvas_service_trigger_slot_t));
+    if (!ctx->trigger_list) {
+        ERROR_LOG("create trigger list failed");
+        goto fail;
+    }
 
     bsp_display_on(ctx->display, 1);
     bsp_display_set_brightness(ctx->display, 100);
@@ -361,6 +393,11 @@ void canvas_service_register_trigger_callback(canvas_service_trigger_callback_t 
 {
     (void)callback;
     (void)ctx;
+}
+
+void canvas_service_unregister_trigger_callback(canvas_service_trigger_callback_t callback)
+{
+    (void)callback;
 }
 
 #endif

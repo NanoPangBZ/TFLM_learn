@@ -68,7 +68,7 @@ set(FRAMEWORK_SOURCES
     src/service/canvas/canvas_service.c
 
     # ---- test ----
-    # src/test/canvas_service/canvas_service_test.c
+    src/test/canvas_service/canvas_service_test.c
     # src/test/bsp_display/bsp_display_test.c
     # src/test/bsp_touch/bsp_touch_test.c
 )
