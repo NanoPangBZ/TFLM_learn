@@ -153,14 +153,27 @@ static void num_discern_trigger_cb(const canvas_service_trigger_t* trigger, void
     }
     preview_present(&g_pv_ink);
 
-    /* 2. 包围盒 -> 20x20（区域平均降采样） */
+    /* 2. 包围盒 -> 20x20（等比缩放保留宽高比，区域平均降采样） */
+    float scale = (crop_w > crop_h) ? (20.0f / (float)crop_w) : (20.0f / (float)crop_h);
+    int sw = (int)(crop_w * scale + 0.5f);   /* 缩放后宽度 */
+    int sh = (int)(crop_h * scale + 0.5f);   /* 缩放后高度 */
+    if (sw < 1) sw = 1;
+    if (sh < 1) sh = 1;
+    int pad_x = (ND_DIGIT_SIZE - sw) / 2;    /* 20x20 内的水平偏移 */
+    int pad_y = (ND_DIGIT_SIZE - sh) / 2;    /* 20x20 内的垂直偏移 */
+
     float digit[ND_DIGIT_SIZE * ND_DIGIT_SIZE];
     for (int oy = 0; oy < ND_DIGIT_SIZE; oy++) {
         for (int ox = 0; ox < ND_DIGIT_SIZE; ox++) {
-            int x0 = min_x + ox * crop_w / ND_DIGIT_SIZE;
-            int x1 = min_x + (ox + 1) * crop_w / ND_DIGIT_SIZE;
-            int y0 = min_y + oy * crop_h / ND_DIGIT_SIZE;
-            int y1 = min_y + (oy + 1) * crop_h / ND_DIGIT_SIZE;
+            int sx = ox - pad_x, sy = oy - pad_y;
+            if (sx < 0 || sx >= sw || sy < 0 || sy >= sh) {
+                digit[oy * ND_DIGIT_SIZE + ox] = 0.0f;
+                continue;
+            }
+            int x0 = min_x + sx * crop_w / sw;
+            int x1 = min_x + (sx + 1) * crop_w / sw;
+            int y0 = min_y + sy * crop_h / sh;
+            int y1 = min_y + (sy + 1) * crop_h / sh;
             if (x1 <= x0) x1 = x0 + 1;
             if (y1 <= y0) y1 = y0 + 1;
             float sum = 0.0f;
@@ -180,12 +193,25 @@ static void num_discern_trigger_cb(const canvas_service_trigger_t* trigger, void
     preview_render(&g_pv_digit, "2. 20x20 digit", s_gray, ND_DIGIT_SIZE, ND_DIGIT_SIZE, ND_PREVIEW_SCALE);
     preview_present(&g_pv_digit);
 
-    /* 3. 居中到 28x28，归一化到 [0,1] */
-    int off = (ND_GRID_SIZE - ND_DIGIT_SIZE) / 2;
+    /* 3. 计算 20x20 数字的质心，居中到 28x28，归一化到 [0,1] */
+    float m00 = 0.0f, mx = 0.0f, my = 0.0f;
+    for (int y = 0; y < ND_DIGIT_SIZE; y++) {
+        for (int x = 0; x < ND_DIGIT_SIZE; x++) {
+            float v = digit[y * ND_DIGIT_SIZE + x];
+            m00 += v;
+            mx += (float)x * v;
+            my += (float)y * v;
+        }
+    }
+    float cx = (m00 > 0.0f) ? (mx / m00) : (ND_DIGIT_SIZE / 2.0f);
+    float cy = (m00 > 0.0f) ? (my / m00) : (ND_DIGIT_SIZE / 2.0f);
+    int shift_x = (int)(ND_GRID_SIZE / 2.0f - cx + 0.5f);
+    int shift_y = (int)(ND_GRID_SIZE / 2.0f - cy + 0.5f);
+
     float input[ND_INPUT_SIZE];
     for (int y = 0; y < ND_GRID_SIZE; y++) {
         for (int x = 0; x < ND_GRID_SIZE; x++) {
-            int sx = x - off, sy = y - off;
+            int sx = x - shift_x, sy = y - shift_y;
             float v = 0.0f;
             if (sx >= 0 && sx < ND_DIGIT_SIZE && sy >= 0 && sy < ND_DIGIT_SIZE) {
                 v = digit[sy * ND_DIGIT_SIZE + sx];
