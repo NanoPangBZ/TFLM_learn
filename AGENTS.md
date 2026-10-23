@@ -41,6 +41,7 @@ scripts/build.py     构建脚本（debug / release / --clean / TMP 重定向）
 scripts/fetch_deps.py 下载第三方依赖到 third_party/
 cmake/sdl3.cmake     共享 SDL3 定位，提供 sdl3_attach() / sdl3_ttf_attach()
 src/                 框架源码（镜像参考工程结构，见 README）
+tools/                Python/C 工具（train_mnist_mlp.py 训练导出权重、验证脚本）
 .vscode/             tasks.json + launch.json（F5 构建·调试）
 ```
 
@@ -57,7 +58,7 @@ src/                 框架源码（镜像参考工程结构，见 README）
 - [x] 构建系统（build.bat → build.py：debug / release 两个目标）
 - [x] VS Code/Cursor F5 构建 + gdb 调试配置
 - [ ] P1 正弦波：密集网络拟合 sin，int8 量化后 SDL 实时画「预测 vs 真值」
-- [ ] P2 MNIST：CNN + 画板实时识别手写数字
+- [x] num_discern：手写数字识别 app（MLP 784→32→10 float32，MNIST 95%；canvas 空闲触发 → 预处理 28×28 → 推理 → 日志输出）
 
 ## 关键决策与踩坑记录（别重蹈覆辙）
 
@@ -70,6 +71,7 @@ src/                 框架源码（镜像参考工程结构，见 README）
 7. **MinGW PE 链接段注册不可用**：参考工程的 `__attribute__((section("__function_regedit")))` 段注册在 MinGW 下失效（`#pragma pack(1)`+位域导致不同编译单元 `sizeof(function_item_t)` 不一致、段按 16 字节对齐插入填充），框架改用 GCC 构造函数 + 静态注册表（`c_function_regedit_add`）等价实现，接口宏/结构体保持逐字一致。
 8. **SDL3 3.4.18 API 命名**：原子指针是 `void**` + `SDL_Get/SetAtomicPointer`（非 `SDL_AtomicPtr`）；线程优先级用 `SDL_SetCurrentThreadPriority`（非 `SDL_SetThreadPriority`）；优先级枚举只有 LOW/NORMAL/HIGH/TIME_CRITICAL。
 9. **e_mutex 用 SDL_Semaphore(1) 而非 SDL_Mutex**：SDL3 的 `SDL_Mutex` 是递归锁，为对齐参考的二值信号量（非递归）语义改用信号量。
+10. **e_heap 是 bump 分配器、`e_heap_free` 为空操作**：只「分配一次、永不释放」（同 TFLM arena 模式）。热路径/回调里不能反复 `e_heap_malloc`（每次永久吃堆，几次即耗尽），应改用静态缓冲或一次性分配。
 
 ## 已锁定版本
 

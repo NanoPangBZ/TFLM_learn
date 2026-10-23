@@ -19,7 +19,10 @@ include("${CMAKE_CURRENT_LIST_DIR}/cmake/sdl3.cmake")
 
 set(FRAMEWORK_SOURCES
     src/main.c
-    src/app/app_demo.c
+
+    # ----- 数字识别app
+    src/app/num_discern/num_discern.c
+    src/app/num_discern/num_discern_model.c
 
     # ---- framework / private / sdl ----
     src/framework/private/sdl/e_critical.c
