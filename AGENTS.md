@@ -83,3 +83,4 @@ tools/                Python/C 工具（train_mnist_mlp.py 训练导出权重、
 
 - 不主动 commit/push，除非用户明确要求。
 - 提交信息用中文，按 `type: 描述` 格式（build/demo/feat/chore 等）。
+- 提交时只提交暂存区已有内容（直接 `git commit`），**不自动 `git add -A`**，由用户自行决定暂存哪些文件。

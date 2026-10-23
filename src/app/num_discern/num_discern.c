@@ -1,6 +1,7 @@
 /* num_discern — 手写数字识别 app。
- * 依赖 canvas_service：绘制 -> 空闲触发 -> 回调收到 RGB565 画布，
- * 本 app 预处理成 28x28 灰度，跑 MLP 推理，日志输出识别结果。 */
+ * 依赖 canvas_service：绘制 -> 空闲触发 -> 回调收到 RGB565 画布。
+ * 预处理成 28x28 灰度，跑 MLP 推理；并用 SDL 多窗口可视化预处理各阶段。 */
+#include <SDL3/SDL.h>
 #include "framework/c_function_regedit.h"
 #include "framework/e_log.h"
 #include "service/canvas_service.h"
@@ -8,6 +9,7 @@
 #include "num_discern_model.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 
 #define TAG "num_discern"
 #define INFO_LOG(...)   E_INFO_LOG(TAG, __VA_ARGS__)
@@ -17,10 +19,74 @@
 #define ND_GRID_SIZE   28   /* MNIST 输入尺寸 */
 #define ND_DIGIT_SIZE  20   /* 数字在 28x28 内占 20x20 */
 #define ND_INK_THRESHOLD 16 /* 墨迹阈值（去噪） */
+#define ND_PREVIEW_SCALE 8  /* 预览窗口放大倍数 */
 
 /* 墨迹临时缓冲（静态）：e_heap 是 bump 分配器、free 为空操作，
  * 热路径不能反复 e_heap_malloc（会持续吃堆），改用固定静态缓冲。 */
 static uint8_t s_ink[BSP_DISPLAY_WIDTH * BSP_DISPLAY_HEIGHT];
+static uint8_t s_gray[ND_INPUT_SIZE];   /* 显示用灰度缓冲（够 20x20 与 28x28） */
+
+/* 预处理可视化窗口（SDL 直接建窗，仿 canvas_service_test） */
+typedef struct nd_preview_t {
+    SDL_Window*   win;
+    SDL_Renderer* ren;
+    SDL_Texture*  tex;
+    uint32_t*     buf;
+} nd_preview_t;
+
+static nd_preview_t g_pv_ink;
+static nd_preview_t g_pv_digit;
+static nd_preview_t g_pv_input;
+
+static int preview_ensure(nd_preview_t* p, const char* title, int w, int h)
+{
+    if (p->win) {
+        return 0;
+    }
+    p->win = SDL_CreateWindow(title, w, h, 0);
+    p->ren = p->win ? SDL_CreateRenderer(p->win, NULL) : NULL;
+    p->tex = p->ren ? SDL_CreateTexture(p->ren, SDL_PIXELFORMAT_RGBX8888,
+                                        SDL_TEXTUREACCESS_STREAMING, w, h) : NULL;
+    p->buf = p->tex ? (uint32_t*)malloc((size_t)w * h * 4) : NULL;
+    return (p->win && p->ren && p->tex && p->buf) ? 0 : -1;
+}
+
+/* 把 w×h 灰度图（0=黑，255=白）放大 scale 倍渲染到预览窗，不 Present */
+static void preview_render(nd_preview_t* p, const char* title,
+                           const uint8_t* gray, int w, int h, int scale)
+{
+    int dw = w * scale, dh = h * scale;
+    if (preview_ensure(p, title, dw, dh) != 0) {
+        return;
+    }
+    for (int y = 0; y < dh; y++) {
+        for (int x = 0; x < dw; x++) {
+            uint8_t v = gray[(y / scale) * w + (x / scale)];
+            p->buf[y * dw + x] = 0xFF000000u | ((uint32_t)v << 16) | ((uint32_t)v << 8) | v;
+        }
+    }
+    SDL_UpdateTexture(p->tex, NULL, p->buf, dw * 4);
+    SDL_RenderClear(p->ren);
+    SDL_RenderTexture(p->ren, p->tex, NULL, NULL);
+}
+
+static void preview_present(nd_preview_t* p)
+{
+    if (p->ren) {
+        SDL_RenderPresent(p->ren);
+    }
+}
+
+/* float 灰度 -> uint8（乘以 scale255 后裁剪到 0..255） */
+static void float_to_gray(const float* src, uint8_t* dst, int n, float scale255)
+{
+    for (int i = 0; i < n; i++) {
+        float v = src[i] * scale255;
+        if (v < 0.0f) v = 0.0f;
+        if (v > 255.0f) v = 255.0f;
+        dst[i] = (uint8_t)v;
+    }
+}
 
 /* RGB565 -> 亮度 -> 反相墨迹（黑笔迹->高值，白底->0） */
 static uint8_t rgb565_to_ink(uint16_t c)
@@ -78,6 +144,15 @@ static void num_discern_trigger_cb(const canvas_service_trigger_t* trigger, void
     int crop_w = max_x - min_x + 1;
     int crop_h = max_y - min_y + 1;
 
+    /* 预览 1：墨迹图 + 包围盒（红框） */
+    preview_render(&g_pv_ink, "1. ink + bbox", ink, (int)w, (int)h, 1);
+    if (g_pv_ink.ren) {
+        SDL_SetRenderDrawColor(g_pv_ink.ren, 255, 0, 0, 255);
+        SDL_FRect r = { (float)min_x, (float)min_y, (float)crop_w, (float)crop_h };
+        SDL_RenderRect(g_pv_ink.ren, &r);
+    }
+    preview_present(&g_pv_ink);
+
     /* 2. 包围盒 -> 20x20（区域平均降采样） */
     float digit[ND_DIGIT_SIZE * ND_DIGIT_SIZE];
     for (int oy = 0; oy < ND_DIGIT_SIZE; oy++) {
@@ -100,6 +175,11 @@ static void num_discern_trigger_cb(const canvas_service_trigger_t* trigger, void
         }
     }
 
+    /* 预览 2：20x20 降采样结果 */
+    float_to_gray(digit, s_gray, ND_DIGIT_SIZE * ND_DIGIT_SIZE, 1.0f);
+    preview_render(&g_pv_digit, "2. 20x20 digit", s_gray, ND_DIGIT_SIZE, ND_DIGIT_SIZE, ND_PREVIEW_SCALE);
+    preview_present(&g_pv_digit);
+
     /* 3. 居中到 28x28，归一化到 [0,1] */
     int off = (ND_GRID_SIZE - ND_DIGIT_SIZE) / 2;
     float input[ND_INPUT_SIZE];
@@ -113,6 +193,11 @@ static void num_discern_trigger_cb(const canvas_service_trigger_t* trigger, void
             input[y * ND_GRID_SIZE + x] = v / 255.0f;
         }
     }
+
+    /* 预览 3：28x28 模型输入（模型真正看到的东西） */
+    float_to_gray(input, s_gray, ND_INPUT_SIZE, 255.0f);
+    preview_render(&g_pv_input, "3. 28x28 input", s_gray, ND_GRID_SIZE, ND_GRID_SIZE, ND_PREVIEW_SCALE);
+    preview_present(&g_pv_input);
 
     /* 4. 推理并输出 */
     int result = num_discern_predict(input);
