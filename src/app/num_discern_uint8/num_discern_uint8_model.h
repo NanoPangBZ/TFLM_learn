@@ -18,3 +18,8 @@ void num_discern_uint8_infer(const uint8_t* input_q, uint8_t* hidden_q, uint8_t*
  * @brief 推理并返回 argmax（0..9）
  */
 int num_discern_uint8_predict(const uint8_t* input_q);
+
+/**
+ * @brief 模型权重+偏置占用的字节数（uint8/int32）
+ */
+uint32_t num_discern_uint8_model_size_bytes(void);

@@ -19,6 +19,11 @@
 #include "num_discern_uint8_model.h"
 #include "num_discern_uint8_weights.h"
 
+uint32_t num_discern_uint8_model_size_bytes(void)
+{
+    return (uint32_t)(sizeof(q8_w1) + sizeof(q8_b1) + sizeof(q8_w2) + sizeof(q8_b2));
+}
+
 static uint8_t s_hidden[Q8_HIDDEN_SIZE];
 static uint8_t s_output[Q8_OUTPUT_SIZE];
 

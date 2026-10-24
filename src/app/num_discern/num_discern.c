@@ -233,6 +233,9 @@ static void num_discern_trigger_cb(const canvas_service_trigger_t* trigger, void
 static int num_discern_init(void)
 {
     canvas_service_register_trigger_callback(num_discern_trigger_cb, NULL);
+    INFO_LOG("model weights: %u bytes, input: %u bytes",
+             (unsigned)num_discern_model_size_bytes(),
+             (unsigned)(ND_INPUT_SIZE * sizeof(float)));
     INFO_LOG("ready, waiting for canvas trigger");
     return 0;
 }

@@ -3,6 +3,11 @@
 #include "num_discern_model.h"
 #include "num_discern_model_weights.h"
 
+uint32_t num_discern_model_size_bytes(void)
+{
+    return (uint32_t)(sizeof(nd_w1) + sizeof(nd_b1) + sizeof(nd_w2) + sizeof(nd_b2));
+}
+
 int num_discern_predict(const float* input)
 {
     float hidden[ND_HIDDEN_SIZE];

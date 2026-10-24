@@ -236,6 +236,9 @@ static void num_discern_uint8_trigger_cb(const canvas_service_trigger_t* trigger
 static int num_discern_uint8_init(void)
 {
     canvas_service_register_trigger_callback(num_discern_uint8_trigger_cb, NULL);
+    INFO_LOG("model weights: %u bytes, input: %u bytes",
+             (unsigned)num_discern_uint8_model_size_bytes(),
+             (unsigned)Q8_INPUT_SIZE);
     INFO_LOG("ready (pure uint8), waiting for canvas trigger");
     return 0;
 }
