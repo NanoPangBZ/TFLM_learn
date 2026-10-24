@@ -20,24 +20,32 @@ include("${CMAKE_CURRENT_LIST_DIR}/cmake/sdl3.cmake")
 # ============================================================================
 # 数字识别 app 选择：直接注释 / 取消注释源码，不使用 CMake option。
 #
-# 当前启用：纯 uint8 实验版。
+# 当前启用：num_discern_1bit（20x20 1-bit 输入实验版）。
 #
-# 切回 float 版：
-#   1. 注释掉下面“uint8 版”的两行；
-#   2. 取消注释“float 版”的三行。
+# 切回 28x28 uint8 版：
+#   1. 注释掉“num_discern_1bit”的两行；
+#   2. 取消注释“uint8 28x28 版”的两行。
 #
-# 注意：两版只能启用一组。同时启用会注册两个 trigger 回调，
-#       同一笔迹会触发两次、弹两套窗口。
+# 切回 28x28 float 版：
+#   1. 注释掉“num_discern_1bit”的两行；
+#   2. 取消注释“float 28x28 版”的三行。
+#
+# 注意：只能启用一组。同时启用会注册多个 trigger 回调，
+#       同一笔迹会触发多次、弹多套窗口。
 # ============================================================================
 
 set(FRAMEWORK_SOURCES
     src/main.c
 
-    # ----- uint8 版（当前启用）-----
-    src/app/num_discern_uint8/num_discern_uint8.c
-    src/app/num_discern_uint8/num_discern_uint8_model.c
+    # ----- num_discern_1bit（1-bit 20x20，当前启用）-----
+    src/app/num_discern_1bit/num_discern_1bit.c
+    src/app/num_discern_1bit/num_discern_1bit_model.c
 
-    # ----- float 版（切回时取消注释，并注释上面两行）-----
+    # ----- uint8 28x28 版（切回时取消注释，并注释上面两行）-----
+    # src/app/num_discern_uint8/num_discern_uint8.c
+    # src/app/num_discern_uint8/num_discern_uint8_model.c
+
+    # ----- float 28x28 版（切回时取消注释，并注释上面各版）-----
     # src/app/num_discern/num_discern.c
     # src/app/num_discern/num_discern_model.c
     # src/test/canvas_service/canvas_service_test.c
