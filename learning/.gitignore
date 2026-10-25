@@ -1,0 +1,14 @@
+# 训练产物不提交
+out/
+data/
+models/
+
+*.npz
+*.keras
+*.h5
+*.tflite
+*.bin
+
+# Python 缓存
+__pycache__/
+*.py[cod]
