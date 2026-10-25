@@ -87,6 +87,7 @@ def load_idx_labels(path: Path) -> np.ndarray:
 
 
 def main() -> int:
+    # 控制台编码：避免 Windows 下中文提示乱码
     if hasattr(sys.stdout, "reconfigure"):
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
@@ -94,6 +95,7 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
 
+    # 命令行参数：训练超参数 + 是否跳过下载
     parser = argparse.ArgumentParser(description="下载 MNIST 并训练一个简易 MLP。")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--hidden", type=int, default=64)
@@ -103,9 +105,11 @@ def main() -> int:
     parser.add_argument("--skip-download", action="store_true")
     args = parser.parse_args()
 
+    # 运行环境：确认 TensorFlow 可用，并确保训练集已下载
     ensure_tensorflow_available()
     ensure_download(args.skip_download)
 
+    # 数据读取：IDX -> (N, 28, 28) 图像 + (N,) 标签
     print("[2/4] load MNIST training set ...")
     images_path = DATA_DIR / "train-images-idx3-ubyte.gz"
     labels_path = DATA_DIR / "train-labels-idx1-ubyte.gz"
@@ -119,6 +123,7 @@ def main() -> int:
     print(f"  labels: {labels.shape} {labels.dtype}")
     print(f"  class counts: {np.bincount(labels, minlength=10).tolist()}")
 
+    # 输入整理：展平成 784 维，并归一化到 [0,1]
     x = images.reshape(len(images), -1).astype(np.float32) / 255.0
     y = labels.astype(np.int64)
     n = len(x)
@@ -127,6 +132,7 @@ def main() -> int:
         print("[error] --val 必须大于 0", file=sys.stderr)
         return 1
 
+    # 数据划分：固定种子随机打乱，切出训练集和验证集
     rng = np.random.default_rng(args.seed)
     perm = rng.permutation(n)
     val_idx = perm[:val_n]
@@ -141,6 +147,7 @@ def main() -> int:
 
     tf.keras.utils.set_random_seed(args.seed)
 
+    # 模型构建：最小 MLP，输入 784，隐藏层可调，输出 10 类
     print("[3/4] build and train MLP ...")
     model = tf.keras.Sequential([
         tf.keras.layers.Input(shape=(784,)),
@@ -154,6 +161,7 @@ def main() -> int:
     )
     model.summary()
 
+    # 训练：用验证集观察泛化，避免只看训练准确率
     model.fit(
         x_train, y_train,
         validation_data=(x_val, y_val),
@@ -162,6 +170,7 @@ def main() -> int:
         verbose=2,
     )
 
+    # 评估与保存：验证准确率、混淆矩阵、.keras 模型文件
     print("[4/4] evaluate ...")
     val_loss, val_acc = model.evaluate(x_val, y_val, verbose=0)
     print(f"  val loss    : {val_loss:.4f}")
