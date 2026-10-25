@@ -39,7 +39,19 @@ learning/mnist/data
 --epochs 5 --hidden 128 --batch-size 64 --val 10000 --skip-download
 ```
 
+`--hidden` 支持多个值，用来控制隐藏层数量和每层宽度：
+
+```bat
+--hidden 64          rem 1 层：784 -> 64 -> 10
+--hidden 128 64      rem 2 层：784 -> 128 -> 64 -> 10
+--hidden 128 64 32   rem 3 层：784 -> 128 -> 64 -> 32 -> 10
+```
+
+默认每层使用 ReLU，最后一层是 10 类 softmax。层数/宽度越大，参数量和容量越大，也更容易过拟合；MNIST 上先试 1–2 层即可。
+
 当前一次运行结果：验证集 **96.42%**，参数量 **50 890**。
+
+单层与多层隐藏层的区别、参数对比和选择建议见 [note.md](note.md)。
 
 > 必须用仓库虚拟环境运行。直接 `python train_mlp_baseline.py` 会找不到 TensorFlow；
 > 脚本会提示正确的解释器路径并退出。
@@ -51,7 +63,7 @@ learning/mnist/data
 
 建议从这个顺序开始：
 
-1. `train_mlp_baseline.py`：28×28 float，784 → 64 → 10（已创建）；
+1. `train_mlp_baseline.py`：28×28 float，默认 `784 → 64 → 10`，`--hidden` 可改宽度/层数；
 2. `train_mlp_hidden.py`：改隐藏层 32/64/128，对比参数量和准确率；
 3. `train_mlp_binary.py`：20×20 1-bit 输入，参考 [tools/train_mnist_1bit.py](../../tools/train_mnist_1bit.py)；
 4. `quantize_ptq.py`：float 模型导出 int8 TFLite，比较准确率/体积；

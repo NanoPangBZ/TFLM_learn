@@ -4,12 +4,13 @@
 流程：
   1. 调用 learning/mnist/download_mnist_train.py（已存在则跳过下载）；
   2. 读取 60000 张 28x28 训练图，按 50k/10k 切分 train/val；
-  3. 训练 784 -> hidden -> 10 的 MLP；
+  3. 训练 784 -> hidden... -> 10 的 MLP；
   4. 在验证集上评估，保存模型到 learning/out/。
 
 用法：
     .venv\\Scripts\\python.exe learning\\mnist\\train_mlp_baseline.py
     .venv\\Scripts\\python.exe learning\\mnist\\train_mlp_baseline.py --epochs 5 --hidden 64
+    .venv\\Scripts\\python.exe learning\\mnist\\train_mlp_baseline.py --hidden 128 64
     .venv\\Scripts\\python.exe learning\\mnist\\train_mlp_baseline.py --skip-download
 
 注意：
@@ -98,7 +99,13 @@ def main() -> int:
     # 命令行参数：训练超参数 + 是否跳过下载
     parser = argparse.ArgumentParser(description="下载 MNIST 并训练一个简易 MLP。")
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--hidden", type=int, default=64)
+    parser.add_argument(
+        "--hidden",
+        type=int,
+        nargs="+",
+        default=[64],
+        help="每层隐藏神经元数，可多值，例如 --hidden 128 64",
+    )
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--val", type=int, default=10000, help="验证集张数")
     parser.add_argument("--seed", type=int, default=0)
@@ -149,11 +156,17 @@ def main() -> int:
 
     # 模型构建：最小 MLP，输入 784，隐藏层可调，输出 10 类
     print("[3/4] build and train MLP ...")
-    model = tf.keras.Sequential([
-        tf.keras.layers.Input(shape=(784,)),
-        tf.keras.layers.Dense(args.hidden, activation="relu"),
-        tf.keras.layers.Dense(10, activation="softmax"),
-    ])
+    if any(h <= 0 for h in args.hidden):
+        print("[error] --hidden 的每一层都必须大于 0", file=sys.stderr)
+        return 1
+
+    layers = [tf.keras.layers.Input(shape=(784,))]
+    for h in args.hidden:
+        layers.append(tf.keras.layers.Dense(h, activation="relu"))
+    layers.append(tf.keras.layers.Dense(10, activation="softmax"))
+    print("  hidden layers: " + " -> ".join(str(h) for h in args.hidden))
+
+    model = tf.keras.Sequential(layers)
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
         loss="sparse_categorical_crossentropy",
