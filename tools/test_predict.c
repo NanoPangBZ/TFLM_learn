@@ -29,7 +29,7 @@ int main(void)
 
     int correct = 0;
     for (int i = 0; i < N; i++) {
-        int pred = num_discern_predict(x + (size_t)i * ND_INPUT_SIZE);
+        int pred = num_discern_predict(x + (size_t)i * ND_INPUT_SIZE, NULL);
         if (pred == (int)y[i]) {
             correct++;
         } else if (i < 20) {

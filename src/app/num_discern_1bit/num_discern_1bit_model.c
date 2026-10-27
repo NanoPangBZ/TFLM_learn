@@ -9,6 +9,8 @@
 #include "num_discern_1bit_model.h"
 #include "num_discern_1bit_weights.h"
 
+#include <math.h>
+
 #define ND1_INPUT_BITS_TOTAL (ND1_INPUT_BYTES * 8)
 
 static uint8_t s_bits[ND1_INPUT_BITS_TOTAL];
@@ -47,7 +49,35 @@ static int32_t unpack_bits(const uint8_t* packed, uint8_t* bits)
     return sum;
 }
 
-int num_discern_1bit_predict(const uint8_t* packed)
+/* 反量化 logits -> softmax；同时返回 argmax */
+static int dequant_softmax_argmax(const uint8_t* out_q, float* probs)
+{
+    float logits[ND1_OUTPUT_SIZE];
+    int best = 0;
+    for (int k = 0; k < ND1_OUTPUT_SIZE; k++) {
+        logits[k] = ND1_OUTPUT_SCALE * ((float)out_q[k] - (float)ND1_OUTPUT_ZERO_POINT);
+        if (k > 0 && logits[k] > logits[best]) {
+            best = k;
+        }
+    }
+
+    if (probs) {
+        float max_v = logits[best];
+        float sum = 0.0f;
+        for (int k = 0; k < ND1_OUTPUT_SIZE; k++) {
+            probs[k] = expf(logits[k] - max_v);
+            sum += probs[k];
+        }
+        if (sum > 0.0f) {
+            for (int k = 0; k < ND1_OUTPUT_SIZE; k++) {
+                probs[k] /= sum;
+            }
+        }
+    }
+    return best;
+}
+
+int num_discern_1bit_predict(const uint8_t* packed, float* probs)
 {
     int32_t sum_x = unpack_bits(packed, s_bits);
 
@@ -76,11 +106,5 @@ int num_discern_1bit_predict(const uint8_t* packed)
         s_output[k] = clamp_u8(qround_d((double)acc * (double)ND1_M2) + ND1_OUTPUT_ZERO_POINT);
     }
 
-    int best = 0;
-    for (int k = 1; k < ND1_OUTPUT_SIZE; k++) {
-        if (s_output[k] > s_output[best]) {
-            best = k;
-        }
-    }
-    return best;
+    return dequant_softmax_argmax(s_output, probs);
 }

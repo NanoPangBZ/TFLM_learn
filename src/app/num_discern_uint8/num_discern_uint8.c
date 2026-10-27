@@ -229,8 +229,12 @@ static void num_discern_uint8_trigger_cb(const canvas_service_trigger_t* trigger
     preview_present(&g_pv_input);
 
     /* 4. 纯 uint8 推理 */
-    int result = num_discern_uint8_predict(input_q);
+    float probs[Q8_OUTPUT_SIZE];
+    int result = num_discern_uint8_predict(input_q, probs);
     INFO_LOG("recognized digit: %d", result);
+    for (int k = 0; k < Q8_OUTPUT_SIZE; k++) {
+        INFO_LOG("[ %d : %.1f%% ]", k, probs[k] * 100.0f);
+    }
 }
 
 static int num_discern_uint8_init(void)

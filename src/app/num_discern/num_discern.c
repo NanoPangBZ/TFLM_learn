@@ -226,8 +226,12 @@ static void num_discern_trigger_cb(const canvas_service_trigger_t* trigger, void
     preview_present(&g_pv_input);
 
     /* 4. 推理并输出 */
-    int result = num_discern_predict(input);
+    float probs[ND_OUTPUT_SIZE];
+    int result = num_discern_predict(input, probs);
     INFO_LOG("recognized digit: %d", result);
+    for (int k = 0; k < ND_OUTPUT_SIZE; k++) {
+        INFO_LOG("[ %d : %.1f%% ]", k, probs[k] * 100.0f);
+    }
 }
 
 static int num_discern_init(void)

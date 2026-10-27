@@ -3,12 +3,41 @@
 #include "num_discern_model.h"
 #include "num_discern_model_weights.h"
 
+#include <math.h>
+
 uint32_t num_discern_model_size_bytes(void)
 {
     return (uint32_t)(sizeof(nd_w1) + sizeof(nd_b1) + sizeof(nd_w2) + sizeof(nd_b2));
 }
 
-int num_discern_predict(const float* input)
+/* logits -> softmax 概率；同时返回 argmax */
+static int softmax_argmax(const float* logits, float* probs)
+{
+    int best = 0;
+    float max_v = logits[0];
+    for (int k = 1; k < ND_OUTPUT_SIZE; k++) {
+        if (logits[k] > max_v) {
+            max_v = logits[k];
+            best = k;
+        }
+    }
+
+    if (probs) {
+        float sum = 0.0f;
+        for (int k = 0; k < ND_OUTPUT_SIZE; k++) {
+            probs[k] = expf(logits[k] - max_v);
+            sum += probs[k];
+        }
+        if (sum > 0.0f) {
+            for (int k = 0; k < ND_OUTPUT_SIZE; k++) {
+                probs[k] /= sum;
+            }
+        }
+    }
+    return best;
+}
+
+int num_discern_predict(const float* input, float* probs)
 {
     float hidden[ND_HIDDEN_SIZE];
     float out[ND_OUTPUT_SIZE];
@@ -31,12 +60,5 @@ int num_discern_predict(const float* input)
         out[k] = s;
     }
 
-    /* argmax（softmax 单调递增，直接取最大下标即可） */
-    int best = 0;
-    for (int k = 1; k < ND_OUTPUT_SIZE; k++) {
-        if (out[k] > out[best]) {
-            best = k;
-        }
-    }
-    return best;
+    return softmax_argmax(out, probs);
 }

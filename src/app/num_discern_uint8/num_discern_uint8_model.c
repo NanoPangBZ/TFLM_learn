@@ -19,6 +19,8 @@
 #include "num_discern_uint8_model.h"
 #include "num_discern_uint8_weights.h"
 
+#include <math.h>
+
 uint32_t num_discern_uint8_model_size_bytes(void)
 {
     return (uint32_t)(sizeof(q8_w1) + sizeof(q8_b1) + sizeof(q8_w2) + sizeof(q8_b2));
@@ -79,16 +81,37 @@ void num_discern_uint8_infer(const uint8_t* input_q, uint8_t* hidden_q, uint8_t*
     }
 }
 
-int num_discern_uint8_predict(const uint8_t* input_q)
+/* 反量化 logits -> softmax；同时返回 argmax（按反量化后数值） */
+static int dequant_softmax_argmax(const uint8_t* out_q, float* probs)
 {
-    uint8_t out[Q8_OUTPUT_SIZE];
-    num_discern_uint8_infer(input_q, NULL, out);
-
+    float logits[Q8_OUTPUT_SIZE];
     int best = 0;
-    for (int k = 1; k < Q8_OUTPUT_SIZE; k++) {
-        if (out[k] > out[best]) {
+    for (int k = 0; k < Q8_OUTPUT_SIZE; k++) {
+        logits[k] = Q8_OUTPUT_SCALE * ((float)out_q[k] - (float)Q8_OUTPUT_ZERO_POINT);
+        if (k > 0 && logits[k] > logits[best]) {
             best = k;
         }
     }
+
+    if (probs) {
+        float max_v = logits[best];
+        float sum = 0.0f;
+        for (int k = 0; k < Q8_OUTPUT_SIZE; k++) {
+            probs[k] = expf(logits[k] - max_v);
+            sum += probs[k];
+        }
+        if (sum > 0.0f) {
+            for (int k = 0; k < Q8_OUTPUT_SIZE; k++) {
+                probs[k] /= sum;
+            }
+        }
+    }
     return best;
+}
+
+int num_discern_uint8_predict(const uint8_t* input_q, float* probs)
+{
+    uint8_t out[Q8_OUTPUT_SIZE];
+    num_discern_uint8_infer(input_q, NULL, out);
+    return dequant_softmax_argmax(out, probs);
 }

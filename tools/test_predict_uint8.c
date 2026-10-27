@@ -48,7 +48,7 @@ int main(int argc, char** argv)
     int correct = 0;
     int shown = 0;
     for (int i = 0; i < n; i++) {
-        int pred = num_discern_uint8_predict(x + (size_t)i * Q8_INPUT_SIZE);
+        int pred = num_discern_uint8_predict(x + (size_t)i * Q8_INPUT_SIZE, NULL);
         if (pred == (int)y[i]) {
             correct++;
         } else if (shown < 20) {

@@ -16,8 +16,10 @@ void num_discern_uint8_infer(const uint8_t* input_q, uint8_t* hidden_q, uint8_t*
 
 /**
  * @brief 推理并返回 argmax（0..9）
+ * @param input_q 784 个量化像素
+ * @param probs 输出 10 个 softmax 概率（反量化 logits 后计算；可为 NULL）
  */
-int num_discern_uint8_predict(const uint8_t* input_q);
+int num_discern_uint8_predict(const uint8_t* input_q, float* probs);
 
 /**
  * @brief 模型权重+偏置占用的字节数（uint8/int32）
