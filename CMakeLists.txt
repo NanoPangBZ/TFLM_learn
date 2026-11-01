@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.16)
 
 # TFLM_learn 基础软件框架（SDL3 后端）
 # 目录结构镜像参考工程 YouWei Embedded Platform 的 src/ 布局：
@@ -94,6 +94,7 @@ set(FRAMEWORK_SOURCES
     src/bsp/private/sdl/bsp_display_sdl.c
     src/bsp/private/sdl/bsp_touch_sdl.c
     src/bsp/private/sdl/bsp_storage_sdl.c
+    src/bsp/private/sdl/bsp_encoder_sdl.c
 
     # ---- service ----
     src/service/canvas/canvas_service.c
@@ -105,6 +106,7 @@ set(FRAMEWORK_SOURCES
     # src/test/bsp_touch/bsp_touch_test.c
     # src/test/bsp_storage/bsp_storage_test.c
     # src/test/bsp_storage/bsp_storage_rw_test.c
+    src/test/bsp_encoder/bsp_encoder_test.c
 )
 
 add_executable(tflm_framework ${FRAMEWORK_SOURCES})
@@ -116,6 +118,7 @@ target_include_directories(tflm_framework PRIVATE
 )
 
 sdl3_attach(tflm_framework)
+sdl3_ttf_attach(tflm_framework)
 
 # 编译选项按构建类型：Debug 带调试符号关优化（断点单步），Release 开优化。
 if(MSVC)

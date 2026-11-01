@@ -11,6 +11,7 @@
  *     通知主线程，避免在非主线程触碰渲染器。
  */
 #include "arch/arch_display.h"
+#include "arch/arch_input.h"
 #include "arch/private/sdl/arch_display_internal.h"
 #include "arch_cfg.h"
 
@@ -29,8 +30,27 @@ static SDL_Renderer* s_renderer = NULL;
 static Uint32        s_frame_event_type = 0;
 static SDL_AtomicInt s_frame_requested;
 
+/* 输入状态：主线程更新，轮询任务读取 */
+static SDL_AtomicInt s_mouse_x;
+static SDL_AtomicInt s_mouse_y;
+static SDL_AtomicInt s_mouse_left;
+static SDL_AtomicInt s_wheel_delta;
+
 static arch_render_slot_t s_render_slots[ARCH_RENDER_CB_MAX];
 static uint32_t s_render_slot_count = 0;
+
+static void arch_input_update_mouse(float window_x, float window_y)
+{
+    int px = -1;
+    int py = -1;
+
+    if (arch_display_window_to_pixel(window_x, window_y, &px, &py) != 0) {
+        px = -1;
+        py = -1;
+    }
+    SDL_SetAtomicInt(&s_mouse_x, px);
+    SDL_SetAtomicInt(&s_mouse_y, py);
+}
 
 static void arch_render_frame(void)
 {
@@ -85,6 +105,10 @@ int arch_display_init(void)
     s_frame_event_type = SDL_RegisterEvents(1);
 
     SDL_SetAtomicInt(&s_frame_requested, 1);
+    SDL_SetAtomicInt(&s_mouse_x, -1);
+    SDL_SetAtomicInt(&s_mouse_y, -1);
+    SDL_SetAtomicInt(&s_mouse_left, 0);
+    SDL_SetAtomicInt(&s_wheel_delta, 0);
 
     return 0;
 }
@@ -108,6 +132,40 @@ int arch_display_pump(void)
                     quit = 1;
                 }
                 break;
+
+            case SDL_EVENT_MOUSE_MOTION:
+                arch_input_update_mouse(ev.motion.x, ev.motion.y);
+                break;
+
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                arch_input_update_mouse(ev.button.x, ev.button.y);
+                if (ev.button.button == SDL_BUTTON_LEFT) {
+                    SDL_SetAtomicInt(&s_mouse_left, 1);
+                }
+                break;
+
+            case SDL_EVENT_MOUSE_BUTTON_UP:
+                arch_input_update_mouse(ev.button.x, ev.button.y);
+                if (ev.button.button == SDL_BUTTON_LEFT) {
+                    SDL_SetAtomicInt(&s_mouse_left, 0);
+                }
+                break;
+
+            case SDL_EVENT_MOUSE_WHEEL: {
+                Sint32 delta = ev.wheel.integer_y;
+                arch_input_update_mouse(ev.wheel.mouse_x, ev.wheel.mouse_y);
+                if (delta == 0) {
+                    if (ev.wheel.y > 0.0f) {
+                        delta = 1;
+                    } else if (ev.wheel.y < 0.0f) {
+                        delta = -1;
+                    }
+                }
+                if (delta != 0) {
+                    SDL_AddAtomicInt(&s_wheel_delta, (int)delta);
+                }
+                break;
+            }
 
             case SDL_EVENT_WINDOW_EXPOSED:
             case SDL_EVENT_WINDOW_RESIZED:
@@ -207,4 +265,19 @@ void arch_display_request_frame(void)
         ev.type = s_frame_event_type;
         SDL_PushEvent(&ev);
     }
+}
+
+void arch_input_get(arch_input_state_t* state)
+{
+    if (!state) {
+        return;
+    }
+    state->mouse_x = SDL_GetAtomicInt(&s_mouse_x);
+    state->mouse_y = SDL_GetAtomicInt(&s_mouse_y);
+    state->mouse_left = (uint8_t)(SDL_GetAtomicInt(&s_mouse_left) ? 1u : 0u);
+}
+
+int32_t arch_input_take_wheel(void)
+{
+    return (int32_t)SDL_SetAtomicInt(&s_wheel_delta, 0);
 }
