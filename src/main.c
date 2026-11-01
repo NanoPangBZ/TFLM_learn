@@ -4,14 +4,18 @@
  * 本入口不直接接触 SDL。 */
 #include "arch/arch_init.h"
 #include "framework/e_framework_core.h"
+#include <stdio.h>
 
 int main(int argc, char* argv[])
 {
     (void)argc;
     (void)argv;
 
-    /* 平台初始化（SDL 子系统，细节隐藏于 arch 层） */
-    arch_init();
+    /* 平台初始化（SDL 子系统 + 主窗口，细节隐藏于 arch 层） */
+    if (arch_init() != 0) {
+        fprintf(stderr, "[main] arch_init failed\n");
+        return 1;
+    }
 
     /* 进入框架：堆初始化 -> 各层级模块初始化 -> 启动调度器（SDL 线程） */
     enter_framework(arch_log_out_init());

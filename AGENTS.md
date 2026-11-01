@@ -41,6 +41,10 @@ scripts/build.py     构建脚本（debug / release / --clean / TMP 重定向）
 scripts/fetch_deps.py 下载第三方依赖到 third_party/
 cmake/sdl3.cmake     共享 SDL3 定位，提供 sdl3_attach() / sdl3_ttf_attach()
 src/                 框架源码（镜像参考工程结构，见 README）
+    arch_cfg.h       arch 主窗口配置（标题/默认尺寸/可缩放/背景色）
+    arch/            arch 层：主窗口 + 渲染器 + 帧循环（arch_display.c）
+    bsp_cfg.h        BSP_DISPLAY_MAP_TABLE / BSP_TOUCH_MAP_TABLE（type+idx -> 窗口区域）
+    app/common/      debug_display.c：把 app 中间图像写到 display 1/2/3
 tools/                Python/C 工具（train_mnist_mlp.py 训练导出权重、验证脚本）
 .vscode/             tasks.json + launch.json（F5 构建·调试）
 ```
@@ -72,6 +76,7 @@ tools/                Python/C 工具（train_mnist_mlp.py 训练导出权重、
 8. **SDL3 3.4.18 API 命名**：原子指针是 `void**` + `SDL_Get/SetAtomicPointer`（非 `SDL_AtomicPtr`）；线程优先级用 `SDL_SetCurrentThreadPriority`（非 `SDL_SetThreadPriority`）；优先级枚举只有 LOW/NORMAL/HIGH/TIME_CRITICAL。
 9. **e_mutex 用 SDL_Semaphore(1) 而非 SDL_Mutex**：SDL3 的 `SDL_Mutex` 是递归锁，为对齐参考的二值信号量（非递归）语义改用信号量。
 10. **e_heap 是 bump 分配器、`e_heap_free` 为空操作**：只「分配一次、永不释放」（同 TFLM arena 模式）。热路径/回调里不能反复 `e_heap_malloc`（每次永久吃堆，几次即耗尽），应改用静态缓冲或一次性分配。
+11. **arch 统一主窗口，bsp_display/bsp_touch 按 map table 多实例**：窗口/渲染器由 `arch/private/sdl/arch_display.c` 创建，`RenderClear` / `RenderPresent` 全部在 arch 主线程完成；`bsp_cfg.h` 用 `BSP_DISPLAY_MAP_TABLE` / `BSP_TOUCH_MAP_TABLE` 把 `type+idx` 映射到主窗口内的矩形（1:1、超出裁剪），每个 idx 是独立实例。`bsp_display_flush` 只更新内存 staging 并请求重绘，禁止在轮询线程直接调用 SDL 渲染。app 的中间图像通过 `src/app/common/debug_display.c` 写到 display 1/2/3，不再开独立窗口。RGBX8888 的 uint32 是 `0xRRGGBBXX`（R 在高字节），不是 ARGB。
 
 ## 已锁定版本
 

@@ -15,7 +15,7 @@ typedef struct e_log_ctx_t{
     const char* focus_tag;
 }e_log_ctx_t;
 
-const static char* level_lables[] = {
+static const char* level_lables[] = {
     "DEBUG",
     "INFO",
     "WARN",
@@ -91,7 +91,7 @@ void e_log_printf(e_log_level_t level, const char* tag ,const char* fmt, ...)
     va_end(args);
     
     // 确保字符串以null结尾
-    if(ret >= sizeof(msg_buffer)) {
+    if( (size_t)ret >= sizeof(msg_buffer)) {
         msg_buffer[sizeof(msg_buffer) - 1] = '\0';
     }
     
@@ -106,7 +106,7 @@ void e_log_printf(e_log_level_t level, const char* tag ,const char* fmt, ...)
     }
     
     // 确保字符串以null结尾
-    if(ret >= sizeof(log_buffer)) {
+    if( (size_t)ret >= sizeof(log_buffer)) {
         log_buffer[sizeof(log_buffer) - 1] = '\0';
     }
     

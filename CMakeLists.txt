@@ -37,6 +37,9 @@ include("${CMAKE_CURRENT_LIST_DIR}/cmake/sdl3.cmake")
 set(FRAMEWORK_SOURCES
     src/main.c
 
+    # ----- app 公共调试显示（中间图像输出到 bsp_display 区域）-----
+    src/app/common/debug_display.c
+
     # ----- num_discern_1bit（1-bit 20x20，当前启用）-----
     src/app/num_discern_1bit/num_discern_1bit.c
     src/app/num_discern_1bit/num_discern_1bit_model.c
@@ -85,6 +88,7 @@ set(FRAMEWORK_SOURCES
 
     # ---- arch ----
     src/arch/private/sdl/arch_init.c
+    src/arch/private/sdl/arch_display.c
 
     # ---- bsp ----
     src/bsp/private/sdl/bsp_display_sdl.c
