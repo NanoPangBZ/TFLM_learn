@@ -72,7 +72,7 @@ argmax → 日志 "recognized digit: N"
 
 入口是 [num_discern.c](num_discern.c) 的 `num_discern_trigger_cb()`：
 
-1. **格式检查**：只接受 `RGB565`，尺寸不能超过 `BSP_DISPLAY_WIDTH × BSP_DISPLAY_HEIGHT`。
+1. **格式检查**：只接受 `RGB565`；墨迹缓冲在首次 trigger 时按画布实际尺寸从堆里申请，之后复用。
 2. **反相**：`ink = 255 - luminance`。画布是白底黑笔，MNIST 是黑底白字，所以必须反相，否则模型看到的极性完全相反。
 3. **包围盒**：跳过 `<= 16` 的像素，求 min/max x/y；没有墨迹就跳过。
 4. **等比缩放**：长边缩到 20 px，短边按比例，居中放进 20×20；缩放采用区域平均，避免锯齿。

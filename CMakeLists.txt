@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+﻿cmake_minimum_required(VERSION 3.16)
 
 # TFLM_learn 基础软件框架（SDL3 后端）
 # 目录结构镜像参考工程 YouWei Embedded Platform 的 src/ 布局：
@@ -93,6 +93,7 @@ set(FRAMEWORK_SOURCES
     # ---- bsp ----
     src/bsp/private/sdl/bsp_display_sdl.c
     src/bsp/private/sdl/bsp_touch_sdl.c
+    src/bsp/private/sdl/bsp_storage_sdl.c
 
     # ---- service ----
     src/service/canvas/canvas_service.c
@@ -102,6 +103,8 @@ set(FRAMEWORK_SOURCES
     # 切回 float 版时在文件上方取消注释。
     # src/test/bsp_display/bsp_display_test.c
     # src/test/bsp_touch/bsp_touch_test.c
+    # src/test/bsp_storage/bsp_storage_test.c
+    # src/test/bsp_storage/bsp_storage_rw_test.c
 )
 
 add_executable(tflm_framework ${FRAMEWORK_SOURCES})

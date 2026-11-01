@@ -1,6 +1,6 @@
 /* debug_display.c — app 调试图像输出到 bsp_display 区域。
  *
- * 这些 display 实例由 bsp_cfg.h 的 BSP_DISPLAY_MAP_TABLE 定义（idx 1/2/3），
+ * 这些 display 实例由显示配置表定义（idx 1/2/3），
  * 不再是独立 SDL 窗口；绘制只写 RGB565 缓冲，刷新由 bsp_display 统一处理。
  */
 #include "app/common/debug_display.h"

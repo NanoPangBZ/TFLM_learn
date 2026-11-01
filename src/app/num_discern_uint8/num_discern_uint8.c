@@ -8,10 +8,10 @@
  * 预处理代码暂时从 float 版复制，等实验稳定后再考虑抽公共模块。
  */
 #include "framework/c_function_regedit.h"
+#include "framework/e_heap.h"
 #include "framework/e_log.h"
 #include "service/canvas_service.h"
 #include "app/common/debug_display.h"
-#include "bsp_cfg.h"
 #include "num_discern_uint8_model.h"
 
 #include <stdint.h>
@@ -26,11 +26,12 @@
 #define ND_INK_THRESHOLD 16   /* 墨迹阈值（去噪） */
 #define ND_PREVIEW_SCALE 8    /* 预览放大倍数 */
 
-/* 静态缓冲：e_heap 是 bump 分配器、free 为空操作，热路径不要反复 malloc */
-static uint8_t s_ink[BSP_DISPLAY_WIDTH * BSP_DISPLAY_HEIGHT];
+/* 墨迹缓冲：首次 trigger 时按画布尺寸从堆里申请，之后一直复用、不释放 */
+static uint8_t* s_ink = NULL;
+static uint32_t s_ink_size = 0;
 static uint8_t s_gray[Q8_INPUT_SIZE];
 
-/* 中间图像输出到 bsp_cfg.h 里配置的 display 1/2/3，不再是独立窗口 */
+/* 中间图像输出到 display 1/2/3，不再是独立窗口 */
 static app_debug_display_t g_pv_ink;
 static app_debug_display_t g_pv_digit;
 static app_debug_display_t g_pv_input;
@@ -71,8 +72,18 @@ static void num_discern_uint8_trigger_cb(const canvas_service_trigger_t* trigger
     uint32_t w = trigger->width;
     uint32_t h = trigger->height;
     uint32_t pixels = w * h;
-    if (pixels > (uint32_t)(BSP_DISPLAY_WIDTH * BSP_DISPLAY_HEIGHT)) {
-        ERROR_LOG("canvas too large: %u pixels", (unsigned)pixels);
+
+    /* 首次 trigger 时按画布尺寸从堆里申请，之后复用、不释放 */
+    if (!s_ink) {
+        s_ink = (uint8_t*)e_heap_malloc(pixels, E_HEAP_ATTR_DEFAULT);
+        if (!s_ink) {
+            ERROR_LOG("malloc ink buffer failed (%u bytes)", (unsigned)pixels);
+            return;
+        }
+        s_ink_size = pixels;
+        INFO_LOG("ink buffer allocated: %u bytes", (unsigned)pixels);
+    } else if (pixels > s_ink_size) {
+        ERROR_LOG("canvas grew: %u > %u, skip", (unsigned)pixels, (unsigned)s_ink_size);
         return;
     }
 

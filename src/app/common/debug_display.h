@@ -22,7 +22,7 @@ extern "C" {
 /**
  * @brief 打开一个调试显示区域
  * @param d 调试显示对象
- * @param idx bsp_cfg.h 中 BSP_DISPLAY_MAP_TABLE 的 idx
+ * @param idx 显示配置表中调试显示区的 idx
  * @return 0:成功 其它:失败
  */
 int app_debug_display_open(app_debug_display_t* d, uint8_t idx);
