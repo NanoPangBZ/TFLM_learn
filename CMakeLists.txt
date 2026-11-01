@@ -1,0 +1,138 @@
+cmake_minimum_required(VERSION 3.16)
+
+# TFLM_learn 基础软件框架（SDL3 后端）
+# 目录结构镜像参考工程 YouWei Embedded Platform 的 src/ 布局：
+#   src/main.c                   统一入口
+#   src/framework/*.h            框架公开接口（与参考逐字一致）
+#   src/framework/private/sdl/*.c SDL3 后端实现
+#   src/lib/com_host/            通信主机库（自包含，逐字拷贝）
+#   src/lib/symbol_table/        外部符号表
+# 构建入口：根目录 build.bat -> scripts/build.py -> 本 CMakeLists
+project(tflm_framework C)
+
+# 未指定构建类型时默认 Debug（配合 build.py 的 debug/release 两个目标）
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type (Debug or Release)" FORCE)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/sdl3.cmake")
+
+# ============================================================================
+# 数字识别 app 选择：直接注释 / 取消注释源码，不使用 CMake option。
+#
+# 当前启用：num_discern_1bit（20x20 1-bit 输入实验版）。
+#
+# 切回 28x28 uint8 版：
+#   1. 注释掉“num_discern_1bit”的两行；
+#   2. 取消注释“uint8 28x28 版”的两行。
+#
+# 切回 28x28 float 版：
+#   1. 注释掉“num_discern_1bit”的两行；
+#   2. 取消注释“float 28x28 版”的三行。
+#
+# 注意：只能启用一组。同时启用会注册多个 trigger 回调，
+#       同一笔迹会触发多次、弹多套窗口。
+# ============================================================================
+
+set(FRAMEWORK_SOURCES
+    src/main.c
+
+    # ----- app 公共调试显示（中间图像输出到 bsp_display 区域）-----
+    src/app/common/debug_display.c
+
+    # ----- num_discern_1bit（1-bit 20x20，当前启用）-----
+    src/app/num_discern_1bit/num_discern_1bit.c
+    src/app/num_discern_1bit/num_discern_1bit_model.c
+
+    # ----- uint8 28x28 版（切回时取消注释，并注释上面两行）-----
+    # src/app/num_discern_uint8/num_discern_uint8.c
+    # src/app/num_discern_uint8/num_discern_uint8_model.c
+
+    # ----- float 28x28 版（切回时取消注释，并注释上面各版）-----
+    # src/app/num_discern/num_discern.c
+    # src/app/num_discern/num_discern_model.c
+    # src/test/canvas_service/canvas_service_test.c
+
+    # ---- framework / private / sdl ----
+    src/framework/private/sdl/e_critical.c
+    src/framework/private/sdl/e_sched.c
+    src/framework/private/sdl/e_mutex.c
+    src/framework/private/sdl/e_sig.c
+    src/framework/private/sdl/e_heap.c
+    src/framework/private/sdl/e_log.c
+    src/framework/private/sdl/e_polling_pool.c
+    src/framework/private/sdl/e_pend_sv.c
+    src/framework/private/sdl/e_framework_core.c
+    src/framework/private/sdl/e_kv.c
+    src/framework/private/sdl/e_com.c
+    src/framework/private/sdl/e_online_monitor.c
+    src/framework/private/sdl/c_list.c
+    src/framework/private/sdl/c_queue.c
+    src/framework/private/sdl/c_ringbuf.c
+    src/framework/private/sdl/c_function_regedit.c
+    src/framework/private/sdl/c_extern_symbol_table.c
+
+    # ---- lib / com_host ----
+    src/lib/com_host/com_host.c
+    src/lib/com_host/private/com_host_packager.c
+    src/lib/com_host/private/com_host_port.c
+    src/lib/com_host/private/com_host_lib/com_host_crc16.c
+    src/lib/com_host/private/com_host_lib/com_host_list.c
+    src/lib/com_host/private/com_host_lib/com_host_ringbuf.c
+    src/lib/com_host/private/com_host_ll_depend/com_host_ll_heap.c
+    src/lib/com_host/private/com_host_ll_depend/com_host_ll_systime.c
+    src/lib/com_host/private/com_host_package/com_host_your_way_studio_packager.c
+
+    # ---- lib / symbol_table ----
+    src/lib/symbol_table/symbol_table.c
+
+    # ---- arch ----
+    src/arch/private/sdl/arch_init.c
+    src/arch/private/sdl/arch_display.c
+
+    # ---- bsp ----
+    src/bsp/private/sdl/bsp_display_sdl.c
+    src/bsp/private/sdl/bsp_touch_sdl.c
+    src/bsp/private/sdl/bsp_storage_sdl.c
+    src/bsp/private/sdl/bsp_encoder_sdl.c
+
+    # ---- service ----
+    src/service/canvas/canvas_service.c
+
+    # ---- test ----
+    # canvas_service_test 归在“数字识别 app 选择”里；uint8 demo 下不编译，
+    # 切回 float 版时在文件上方取消注释。
+    # src/test/bsp_display/bsp_display_test.c
+    # src/test/bsp_touch/bsp_touch_test.c
+    # src/test/bsp_storage/bsp_storage_test.c
+    # src/test/bsp_storage/bsp_storage_rw_test.c
+    src/test/bsp_encoder/bsp_encoder_test.c
+)
+
+add_executable(tflm_framework ${FRAMEWORK_SOURCES})
+
+# 统一以 src/ 为包含根，使 framework/*.h、framework_cfg.h、version.h、
+# lib/com_host/*.h 等按参考工程的 include 约定解析。
+target_include_directories(tflm_framework PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/src
+)
+
+sdl3_attach(tflm_framework)
+sdl3_ttf_attach(tflm_framework)
+
+# 编译选项按构建类型：Debug 带调试符号关优化（断点单步），Release 开优化。
+if(MSVC)
+    target_compile_options(tflm_framework PRIVATE /W4)
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        target_compile_options(tflm_framework PRIVATE /O2 /DNDEBUG)
+    else()
+        target_compile_options(tflm_framework PRIVATE /Zi /Od)
+    endif()
+else()
+    target_compile_options(tflm_framework PRIVATE -Wall -Wextra)
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        target_compile_options(tflm_framework PRIVATE -O2 -DNDEBUG)
+    else()
+        target_compile_options(tflm_framework PRIVATE -g -O0)
+    endif()
+endif()

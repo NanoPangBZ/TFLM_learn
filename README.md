@@ -34,7 +34,7 @@ bash setup.sh
 `setup` 脚本**只在本仓库内安装，不污染系统**：
 
 - `.venv/` — Python 虚拟环境（TensorFlow、NumPy、Matplotlib），系统 Python 本身不动。
-- `third_party/SDL3/` — SDL3 开发包，由 `scripts/fetch_sdl3.py` 自动下载解压。
+- `third_party/` — SDL3、SDL3_ttf（内置 FreeType）和字体，由 `scripts/fetch_deps.py` 自动下载。
 
 两者都在 `.gitignore` 里，不随仓库提交；换一台机器 `git clone` 后重新跑脚本即可复现。
 
@@ -57,17 +57,51 @@ verify\02_sdl3_smoke\build\sdl3_smoke.exe
 
 ```
 TFLM_learn/
-├── setup.ps1              # Windows 一键安装（首选）
-├── setup.sh               # Linux/macOS 一键安装
+├── setup.ps1 / setup.sh   # 一键安装环境（首选）
+├── build.bat              # 构建入口（debug / release，委托 scripts/build.py）
+├── CMakeLists.txt         # 根构建脚本（编译整个 src/）
 ├── requirements.txt       # Python 依赖（已锁定版本）
+├── cmake/
+│   └── sdl3.cmake         # 共享的 SDL3 定位 / 链接 helper
 ├── scripts/
-│   └── fetch_sdl3.py      # 下载并解压 SDL3 到 third_party/（跨平台，stdlib only）
-├── verify/
-│   ├── 01_tensorflow_smoke.py   # TF 训练 + int8 量化 + 推理冒烟测试
-│   └── 02_sdl3_smoke/           # SDL3 窗口冒烟测试（C + CMake）
+│   ├── fetch_deps.py      # 下载 SDL3 / SDL3_ttf / 字体到 third_party/
+│   └── build.py           # build.bat 背后的构建脚本（debug / release）
+├── .vscode/               # tasks.json + launch.json（F5 构建·调试）
+├── src/                   # 基础软件框架（镜像参考工程结构）
+│   ├── main.c             # 统一入口
+│   ├── framework_cfg.h    # SDL 后端配置
+│   ├── framework/         # 16 个接口头 + private/sdl 实现
+│   ├── lib/               # com_host / symbol_table
+│   └── app/               # 应用（app_demo.c 验证框架）
+├── verify/                # 安装验证冒烟测试
+│   ├── 01_tensorflow_smoke.py
+│   └── 02_sdl3_smoke/
 ├── .venv/                 # （不提交）本地虚拟环境
-└── third_party/           # （不提交）SDL3 开发包
+└── third_party/           # （不提交）SDL3 / SDL3_ttf / 字体
 ```
+
+## 构建
+
+```bat
+build.bat               rem 默认构建 debug
+build.bat debug         rem Debug（-g -O0，带调试符号）
+build.bat release       rem Release（-O2 -DNDEBUG）
+build.bat --clean debug rem 先清理再构建
+```
+
+编译整个 `src/` 框架，产物分别输出到 `build/debug/` 与 `build/release/`，
+可执行文件均为 `tflm_framework.exe`（SDL3.dll 由 CMake 自动拷贝到产物目录）。
+脚本自动选择生成器（优先 MinGW，否则交给 CMake 自动选 MSVC/Ninja）。
+
+## VS Code / Cursor 调试
+
+已内置 `.vscode/tasks.json` 和 `.vscode/launch.json`：
+
+- **Ctrl+Shift+B** —— 构建 debug（默认构建任务）
+- **F5** —— 自动构建 debug 后用 gdb 调试 `build/debug/tflm_framework.exe`
+
+Debug 目标以 `-g -O0` 编译，带调试符号可正常打断点。
+需要 Microsoft C/C++ 扩展（ms-vscode.cpptools），gdb 路径为 `C:\mingw64\bin\gdb.exe`。
 
 ## 学习路线（下一步）
 
@@ -86,4 +120,4 @@ C++ 侧推理有两条路径，建议都体验：
 
 - Python 3.13（wheels 覆盖 3.10–3.13）
 - TensorFlow 2.21.0 · NumPy 2.5.4 · Matplotlib 3.11.2
-- SDL3 3.4.18
+- SDL3 3.4.18 · SDL3_ttf 3.2.2（内置 FreeType 2.13.2）

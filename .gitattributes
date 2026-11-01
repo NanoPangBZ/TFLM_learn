@@ -9,3 +9,7 @@
 
 # PowerShell scripts conventionally use CRLF on Windows.
 *.ps1 text eol=crlf
+
+# Windows batch files must stay CRLF (cmd.exe parses them line-by-line).
+*.bat text eol=crlf
+*.cmd text eol=crlf

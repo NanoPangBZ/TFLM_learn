@@ -19,6 +19,10 @@ cmake-build-*/
 *.so
 *.dylib
 
+# ---- 框架运行时数据（e_kv 文件后端 / bsp_storage flash 镜像） ----
+kv_data/
+flash_data/
+
 # ---- Model artifacts (regenerate via scripts) ----
 *.tflite
 *.h5
@@ -27,7 +31,7 @@ cmake-build-*/
 *.pb
 
 # ---- IDE / OS ----
-.vscode/
+# 注：.vscode/ 保留提交（tasks.json / launch.json 是共享的构建·调试配置）
 .idea/
 .DS_Store
 Thumbs.db

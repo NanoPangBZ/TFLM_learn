@@ -1,0 +1,39 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build (debug)",
+            "type": "shell",
+            "command": "cmd",
+            "args": ["/c", "build.bat", "debug"],
+            "group": { "kind": "build", "isDefault": true },
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        },
+        {
+            "label": "build (release)",
+            "type": "shell",
+            "command": "cmd",
+            "args": ["/c", "build.bat", "release"],
+            "group": "build",
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        },
+        {
+            "label": "clean (debug)",
+            "type": "shell",
+            "command": "cmd",
+            "args": ["/c", "build.bat", "--clean", "debug"],
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        },
+        {
+            "label": "clean (release)",
+            "type": "shell",
+            "command": "cmd",
+            "args": ["/c", "build.bat", "--clean", "release"],
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        }
+    ]
+}
