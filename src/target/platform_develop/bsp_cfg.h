@@ -51,6 +51,38 @@
 
 /***********************************************************************************************************************/
 /**
+ * @brief bsp_audio_system 配置
+ * @note 映射表项 / RX_IMPL_TYPE_* / TX_IMPL_TYPE_* 定义在 bsp_audio_system_sdl.c。
+ */
+#define BSP_AUDIO_SAMPLE_RATE_HZ    44100u
+#define BSP_AUDIO_FRAME_SAMPLES     128u
+#define BSP_AUDIO_POLL_FREQ_HZ      500u
+
+#define BSP_AUDIO_SYSTEM_RX_MAPTABLE {\
+        {\
+          .rx_impl_type = RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK, .name = "SYS",\
+          .config.system_output_loopback = { .gain = 1.0f }\
+        },\
+        {\
+          .rx_impl_type = RX_IMPL_TYPE_SINE_WAVE, .name = "SINE",\
+          .config.sine_wave = { .frequency = 1000.0f, .amplitude = 0.2f }\
+        },\
+    }
+
+#define BSP_AUDIO_SYSTEM_TX_MAPTABLE {\
+        {\
+          .tx_impl_type = TX_IMPL_TYPE_FILE, .name = "OUT",\
+          .config.file = { .file_path = "audio_tx.wav", .gain = 1.0f }\
+        },\
+    }
+
+#define BSP_AUDIO_ENERGY_X          8
+#define BSP_AUDIO_ENERGY_Y          252
+#define BSP_AUDIO_ENERGY_W          448
+#define BSP_AUDIO_ENERGY_H          80
+
+/***********************************************************************************************************************/
+/**
  * @brief bsp_storage 配置（SDL 文件后端）
  */
 

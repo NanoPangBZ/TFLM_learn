@@ -75,6 +75,7 @@ set(COMMON_SOURCES
     src/bsp/private/sdl/bsp_display_sdl.c
     src/bsp/private/sdl/bsp_touch_sdl.c
     src/bsp/private/sdl/bsp_storage_sdl.c
+    src/bsp/private/sdl/bsp_audio_system_sdl.c
 )
 
 add_executable(${TFLM_APP_TARGET} ${COMMON_SOURCES})

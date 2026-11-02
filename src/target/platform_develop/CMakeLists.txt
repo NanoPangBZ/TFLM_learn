@@ -6,9 +6,11 @@ target_sources(${TFLM_APP_TARGET} PRIVATE
     ${CMAKE_SOURCE_DIR}/src/bsp/private/sdl/bsp_encoder_sdl.c
 
     # ----- test -----
-    ${CMAKE_SOURCE_DIR}/src/test/bsp_display/bsp_display_test.c
-    ${CMAKE_SOURCE_DIR}/src/test/bsp_touch/bsp_touch_test.c
-    ${CMAKE_SOURCE_DIR}/src/test/bsp_encoder/bsp_encoder_test.c
+    # ${CMAKE_SOURCE_DIR}/src/test/bsp_display/bsp_display_test.c
+    # ${CMAKE_SOURCE_DIR}/src/test/bsp_touch/bsp_touch_test.c
+    # ${CMAKE_SOURCE_DIR}/src/test/bsp_encoder/bsp_encoder_test.c
+    # ${CMAKE_SOURCE_DIR}/src/test/bsp_audio_system/bsp_audio_system_test.c
+    ${CMAKE_SOURCE_DIR}/src/test/bsp_audio_system/bsp_audio_system_all_mix_test.c
     # ${CMAKE_SOURCE_DIR}/src/test/bsp_storage/bsp_storage_test.c
     # ${CMAKE_SOURCE_DIR}/src/test/bsp_storage/bsp_storage_rw_test.c
 

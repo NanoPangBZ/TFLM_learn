@@ -6,9 +6,9 @@
  * 窗口允许拖动缩放；各区域按像素 1:1 布局，窗口小于区域时超出部分被裁剪。 */
 
 #define ARCH_WINDOW_TITLE           "platform_develop (SDL3 board)"
-/* 单屏 320x240 + 右侧编码器列（约 120） */
+/* 单屏 320x240 + 右侧编码器列（约 120）+ 底部音频能量条 */
 #define ARCH_WINDOW_WIDTH           464
-#define ARCH_WINDOW_HEIGHT          248
+#define ARCH_WINDOW_HEIGHT          340
 
 
 /* 1: 窗口可拖动缩放；0: 固定大小 */

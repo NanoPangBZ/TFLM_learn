@@ -7,7 +7,8 @@
 
 #define ARCH_WINDOW_TITLE           "TFLM_LEARN (SDL3 board)"
 #define ARCH_WINDOW_WIDTH           800
-#define ARCH_WINDOW_HEIGHT          490
+/* 原 490 + 底部音频能量条 */
+#define ARCH_WINDOW_HEIGHT          530
 
 /* 1: 窗口可拖动缩放；0: 固定大小 */
 #define ARCH_WINDOW_RESIZABLE       1
