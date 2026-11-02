@@ -36,30 +36,20 @@
 /***********************************************************************************************************************/
 /**
  * @brief bsp_audio_system 配置
- * @note 映射表项 / RX_IMPL_TYPE_* / TX_IMPL_TYPE_* 定义在 bsp_audio_system_sdl.c。
+ * @note 采样率 / 帧长 / 通道数；PANEL_W 为频率表与配置页共用宽度。
  */
 #define BSP_AUDIO_SAMPLE_RATE_HZ    44100u
 #define BSP_AUDIO_FRAME_SAMPLES     128u
+#define BSP_AUDIO_RX_CHANNELS       1u
+#define BSP_AUDIO_TX_CHANNELS       1u
 #define BSP_AUDIO_POLL_FREQ_HZ      500u
 
-#define BSP_AUDIO_SYSTEM_RX_MAPTABLE {\
-        {\
-          .rx_impl_type = RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK, .name = "SYS",\
-          .config.system_output_loopback = { .gain = 1.0f }\
-        },\
-    }
-
-#define BSP_AUDIO_SYSTEM_TX_MAPTABLE {\
-        {\
-          .tx_impl_type = TX_IMPL_TYPE_FILE, .name = "OUT",\
-          .config.file = { .file_path = "audio_tx.wav", .gain = 1.0f }\
-        },\
-    }
-
-#define BSP_AUDIO_ENERGY_X          8
-#define BSP_AUDIO_ENERGY_Y          482
-#define BSP_AUDIO_ENERGY_W          784
-#define BSP_AUDIO_ENERGY_H          40
+/* 主显示区右缘约 788，音频列紧挨其右 */
+#define BSP_AUDIO_UI_X              800
+#define BSP_AUDIO_UI_Y              8
+#define BSP_AUDIO_PANEL_W           280
+#define BSP_AUDIO_METER_H           244
+#define BSP_AUDIO_METER_GAP         8
 
 /***********************************************************************************************************************/
 /**

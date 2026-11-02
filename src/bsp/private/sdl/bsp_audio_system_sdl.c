@@ -1,19 +1,26 @@
 /* bsp_audio_system_sdl.c — bsp_audio_system 的 SDL3 后端。
  *
- * 通道由 bsp_cfg.h 的 BSP_AUDIO_SYSTEM_RX_MAPTABLE / TX_MAPTABLE 配置：
- *   - RX：system output loopback / WAV 文件（可循环）/ 正弦源；
- *   - TX：写 PCM WAV / 播放到系统默认输出；
- *   - 能量条：每个映射项一条，显示 map.name。
+ * 编译期（bsp_cfg.h）固定：采样率 / 帧长 / RX·TX 通道数。
+ * 运行时（点击能量框）每路选实现类型；参数用本文件内置默认值，cfg 不配类型。
+ *   RX: NONE / SYS SPK(环回) / SYS MIC / WAV / SINE
+ *   TX: NONE / WAV / SYS
+ * NONE = 关闭该路。启动时全部为 NONE。
  *
- * 线程模型：e_polling_pool 取数 / 凑帧 / 调 handler；arch 主线程画能量条。
+ * 一帧 TX 缓存：每拍先推送上一拍 handler 结果，再拉 RX；handler 在 s_lock 外执行，
+ * 长时间占用不堵推帧 / reopen。首拍输出静音。
+ *
+ * 线程：e_polling_pool 凑帧与 UI 点击；arch 主线程画能量条/配置页。
  */
 #include "bsp/bsp_audio_system.h"
 
 #include "arch/arch_display.h"
+#include "arch/arch_input.h"
 
 #include "framework/c_function_regedit.h"
 #include "framework/e_log.h"
 #include "framework/e_polling_pool.h"
+
+#include "bsp_cfg.h"
 
 #include <SDL3/SDL.h>
 
@@ -26,19 +33,21 @@
 #define WARN_LOG(...)  E_WARN_LOG(TAG, __VA_ARGS__)
 #define ERROR_LOG(...) E_ERROR_LOG(TAG, __VA_ARGS__)
 
-/* 枚举/映射结构仅本文件可见；须在 include bsp_cfg.h 之前定义，
- * 以便 maptable 宏展开时直接写 RX_IMPL_TYPE_* / TX_IMPL_TYPE_*。 */
 typedef enum rx_impl_type_e {
-    RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK = 0,
-    RX_IMPL_TYPE_FILE = 1,
-    RX_IMPL_TYPE_SINE_WAVE = 2,
+    RX_IMPL_TYPE_NONE = 0,
+    RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK = 1, /* 系统扬声器环回 → UI: SYS SPK */
+    RX_IMPL_TYPE_SYSTEM_MIC = 2,             /* 系统麦克风     → UI: SYS MIC */
+    RX_IMPL_TYPE_FILE = 3,
+    RX_IMPL_TYPE_SINE_WAVE = 4,
 } rx_impl_type_e;
 
 typedef enum tx_impl_type_e {
-    TX_IMPL_TYPE_FILE = 0,
-    TX_IMPL_TYPE_SYSTEM_OUTPUT = 1,
+    TX_IMPL_TYPE_NONE = 0,
+    TX_IMPL_TYPE_FILE = 1,
+    TX_IMPL_TYPE_SYSTEM_OUTPUT = 2,
 } tx_impl_type_e;
 
+/* 运行时通道状态（非 cfg）；类型参数切到该 type 时填内置默认值。 */
 typedef struct bsp_audio_system_rx_map_t {
     rx_impl_type_e rx_impl_type;
     const char*    name;
@@ -47,11 +56,14 @@ typedef struct bsp_audio_system_rx_map_t {
             float gain;
         } system_output_loopback;
         struct {
-            const char* file_path;
+            float gain;
+        } system_mic;
+        struct {
+            const char* file_path; /* 指向 path 缓冲 */
             float       gain;
             uint32_t    loop : 1;
             uint32_t    reserve : 31;
-            uint32_t    loop_cnt; /* loop=1 时：0=无限，>0=循环次数上限 */
+            uint32_t    loop_cnt;
         } file;
         struct {
             float frequency;
@@ -74,13 +86,17 @@ typedef struct bsp_audio_system_tx_map_t {
     } config;
 } bsp_audio_system_tx_map_t;
 
-#include "bsp_cfg.h"
-
 #ifndef BSP_AUDIO_SAMPLE_RATE_HZ
-#define BSP_AUDIO_SAMPLE_RATE_HZ    44100u
+#error "bsp_cfg.h must define BSP_AUDIO_SAMPLE_RATE_HZ"
 #endif
 #ifndef BSP_AUDIO_FRAME_SAMPLES
-#define BSP_AUDIO_FRAME_SAMPLES     128u
+#error "bsp_cfg.h must define BSP_AUDIO_FRAME_SAMPLES"
+#endif
+#ifndef BSP_AUDIO_RX_CHANNELS
+#error "bsp_cfg.h must define BSP_AUDIO_RX_CHANNELS"
+#endif
+#ifndef BSP_AUDIO_TX_CHANNELS
+#error "bsp_cfg.h must define BSP_AUDIO_TX_CHANNELS"
 #endif
 #ifndef BSP_AUDIO_CHANNELS
 #define BSP_AUDIO_CHANNELS          2u
@@ -94,34 +110,48 @@ typedef struct bsp_audio_system_tx_map_t {
 #ifndef BSP_AUDIO_RX_MAX
 #define BSP_AUDIO_RX_MAX            4u
 #endif
-#ifndef BSP_AUDIO_ENERGY_X
-#define BSP_AUDIO_ENERGY_X          8
+#ifndef BSP_AUDIO_UI_X
+#define BSP_AUDIO_UI_X              8
 #endif
-#ifndef BSP_AUDIO_ENERGY_Y
-#define BSP_AUDIO_ENERGY_Y          0
+#ifndef BSP_AUDIO_UI_Y
+#define BSP_AUDIO_UI_Y              0
 #endif
-#ifndef BSP_AUDIO_ENERGY_W
-#define BSP_AUDIO_ENERGY_W          200
+#ifndef BSP_AUDIO_PANEL_W
+#define BSP_AUDIO_PANEL_W           280
 #endif
-#ifndef BSP_AUDIO_ENERGY_H
-#define BSP_AUDIO_ENERGY_H          40
+#ifndef BSP_AUDIO_METER_H
+#define BSP_AUDIO_METER_H           140
+#endif
+#ifndef BSP_AUDIO_METER_GAP
+#define BSP_AUDIO_METER_GAP         8
+#endif
+#ifndef AUDIO_SPEC_BINS
+#define AUDIO_SPEC_BINS             24
+#endif
+
+#if (BSP_AUDIO_RX_CHANNELS) > (BSP_AUDIO_RX_MAX)
+#error "BSP_AUDIO_RX_CHANNELS exceeds BSP_AUDIO_RX_MAX"
+#endif
+#if (BSP_AUDIO_TX_CHANNELS) > (BSP_AUDIO_TX_MAX)
+#error "BSP_AUDIO_TX_CHANNELS exceeds BSP_AUDIO_TX_MAX"
 #endif
 
 #define AUDIO_FRAME_FLOATS   (BSP_AUDIO_FRAME_SAMPLES * BSP_AUDIO_CHANNELS)
 #define AUDIO_FRAME_BYTES    (AUDIO_FRAME_FLOATS * (uint32_t)sizeof(float))
 #define AUDIO_ENERGY_DECAY   0.92f
-#define AUDIO_TX_PLAY_MAX_QUEUED_FRAMES  4u
+#define AUDIO_TX_PLAY_MAX_QUEUED_FRAMES  16u
+#define AUDIO_TX_PLAY_CATCHUP_HEADROOM   2u /* 队列剩余不足此帧数则暂停追帧 */
 #define AUDIO_TWO_PI_F                   6.28318530717958647692f
+#define AUDIO_PATH_MAX                   160
+#define AUDIO_PATH_FIELD_H               18.0f
+#define AUDIO_ENERGY_UI_PERIOD_NS        33333333ull /* ~30 Hz 刷新能量条 */
 
-#ifndef BSP_AUDIO_SYSTEM_RX_MAPTABLE
-#error "bsp_cfg.h must define BSP_AUDIO_SYSTEM_RX_MAPTABLE"
-#endif
-#ifndef BSP_AUDIO_SYSTEM_TX_MAPTABLE
-#error "bsp_cfg.h must define BSP_AUDIO_SYSTEM_TX_MAPTABLE"
-#endif
-
-static const bsp_audio_system_rx_map_t s_rx_map[] = BSP_AUDIO_SYSTEM_RX_MAPTABLE;
-static const bsp_audio_system_tx_map_t s_tx_map[] = BSP_AUDIO_SYSTEM_TX_MAPTABLE;
+/* 各 type 内置默认（cfg 不配） */
+#define AUDIO_DEFAULT_RX_WAV_PATH   "audio_rx.wav"
+#define AUDIO_DEFAULT_TX_WAV_PATH   "audio_tx.wav"
+#define AUDIO_DEFAULT_GAIN          1.0f
+#define AUDIO_DEFAULT_SINE_FREQ_HZ  1000.0f
+#define AUDIO_DEFAULT_SINE_AMP      0.2f
 
 typedef struct wav_writer_t {
     SDL_IOStream* io;
@@ -131,32 +161,50 @@ typedef struct wav_writer_t {
 } wav_writer_t;
 
 typedef struct rx_runtime_t {
-    const bsp_audio_system_rx_map_t* map;
-    SDL_AudioStream* stream;     /* loopback 设备流，或文件解码后的拉取流 */
-    /* file 源 */
+    bsp_audio_system_rx_map_t* map; /* 指向可变 cfg */
+    SDL_AudioStream* stream;
     uint8_t*         file_raw;
     uint32_t         file_raw_len;
     SDL_AudioSpec    file_spec;
     uint32_t         loops_done;
     uint8_t          file_eof;
-    /* sine 源 */
     float            sine_phase;
     float            accum[AUDIO_FRAME_FLOATS];
     uint32_t         accum_floats;
 } rx_runtime_t;
 
 typedef struct tx_runtime_t {
-    const bsp_audio_system_tx_map_t* map;
-    wav_writer_t     wav;        /* FILE */
-    SDL_AudioStream* play;       /* SYSTEM_OUTPUT */
+    bsp_audio_system_tx_map_t* map;
+    wav_writer_t     wav;
+    SDL_AudioStream* play;
 } tx_runtime_t;
 
-static float s_tx_float[BSP_AUDIO_TX_MAX][AUDIO_FRAME_FLOATS];
+typedef enum audio_ui_mode_e {
+    AUDIO_UI_ENERGY = 0,
+    AUDIO_UI_CONFIG = 1,
+} audio_ui_mode_e;
+
+/* TX 双缓冲：play 本拍推送；work 给 handler 填下一拍。 */
+static float s_tx_bank[2][BSP_AUDIO_TX_MAX][AUDIO_FRAME_FLOATS];
+static uint8_t s_tx_play_bank;
 static float s_rx_float[BSP_AUDIO_RX_MAX][AUDIO_FRAME_FLOATS];
+
+static bsp_audio_system_rx_map_t s_rx_cfg[BSP_AUDIO_RX_MAX];
+static bsp_audio_system_tx_map_t s_tx_cfg[BSP_AUDIO_TX_MAX];
+static bsp_audio_system_rx_map_t s_rx_draft[BSP_AUDIO_RX_MAX];
+static bsp_audio_system_tx_map_t s_tx_draft[BSP_AUDIO_TX_MAX];
+
+/* 可编辑路径缓冲 + 通道名 */
+static char s_rx_path[BSP_AUDIO_RX_MAX][AUDIO_PATH_MAX];
+static char s_tx_path[BSP_AUDIO_TX_MAX][AUDIO_PATH_MAX];
+static char s_rx_path_draft[BSP_AUDIO_RX_MAX][AUDIO_PATH_MAX];
+static char s_tx_path_draft[BSP_AUDIO_TX_MAX][AUDIO_PATH_MAX];
+static char s_rx_name[BSP_AUDIO_RX_MAX][8];
+static char s_tx_name[BSP_AUDIO_TX_MAX][8];
 
 static rx_runtime_t s_rx[BSP_AUDIO_RX_MAX];
 static tx_runtime_t s_tx[BSP_AUDIO_TX_MAX];
-static uint8_t s_rx_cnt;
+static uint8_t s_rx_cnt; /* = BSP_AUDIO_RX_CHANNELS，编译期固定 */
 static uint8_t s_tx_cnt;
 
 static bsp_audio_handler_t volatile s_user_handler;
@@ -166,12 +214,26 @@ static e_polling_task_handle_t s_polling_task;
 static SDL_Mutex* s_lock;
 static uint64_t s_start_ns;
 static uint64_t s_frames_done;
+static uint64_t s_last_energy_ui_ns;
 static uint8_t s_audio_subsystem_inited;
 
 static SDL_AtomicInt s_energy_tx_q15[BSP_AUDIO_TX_MAX];
 static SDL_AtomicInt s_energy_rx_q15[BSP_AUDIO_RX_MAX];
 static float s_peak_tx[BSP_AUDIO_TX_MAX];
 static float s_peak_rx[BSP_AUDIO_RX_MAX];
+static float s_spec_tx[BSP_AUDIO_TX_MAX][AUDIO_SPEC_BINS];
+static float s_spec_rx[BSP_AUDIO_RX_MAX][AUDIO_SPEC_BINS];
+static float s_pkhz_tx[BSP_AUDIO_TX_MAX];
+static float s_pkhz_rx[BSP_AUDIO_RX_MAX];
+
+/* UI */
+static audio_ui_mode_e s_ui_mode = AUDIO_UI_ENERGY;
+static int s_ui_sel;          /* 0..tx_cnt-1 = TX；tx_cnt.. = RX */
+static uint8_t s_mouse_was_down;
+static SDL_Mutex* s_ui_lock;
+static uint8_t s_path_editing;     /* 1=正在编辑当前选中通道的 WAV 路径 */
+static uint8_t s_text_watch_on;
+static uint32_t s_caret_blink_ms;
 
 /* -------------------------------------------------------------------------- */
 /* WAV 写出                                                                   */
@@ -269,8 +331,11 @@ static void wav_close(wav_writer_t* w)
 }
 
 /* -------------------------------------------------------------------------- */
-/* 能量                                                                       */
+/* 右侧频率表 UI                                                              */
 /* -------------------------------------------------------------------------- */
+
+static const char* rx_type_name(rx_impl_type_e t);
+static const char* tx_type_name(tx_impl_type_e t);
 
 static float calc_rms(const float* buf, uint32_t n)
 {
@@ -286,18 +351,73 @@ static float calc_rms(const float* buf, uint32_t n)
     return (float)sqrt(acc / (double)n);
 }
 
-static void energy_store_all(void)
+/* 简易 DFT 幅度谱（单声道）。
+ * 频率定义与 DFT 一致：f = k * fs / N，k ∈ [1, N/2]。
+ * 旧实现分析用 (b+1)*fs/(2B)、显示用 (b+0.5)*fs/(2B)，1kHz 会误报成 ~459Hz。 */
+static float spectrum_update(const float* interleaved, float* bins_io)
+{
+    const uint32_t n = BSP_AUDIO_FRAME_SAMPLES;
+    const uint32_t k_nyquist = n / 2u;
+    uint32_t b;
+    uint32_t i;
+    float peak_mag = 0.0f;
+    float peak_hz = 0.0f;
+
+    for (b = 0; b < AUDIO_SPEC_BINS; b++) {
+        double re = 0.0;
+        double im = 0.0;
+        /* 显示条均匀映射到 DFT bin 1..N/2 */
+        double k = (AUDIO_SPEC_BINS <= 1u)
+                       ? 1.0
+                       : (1.0 + (double)b * (double)(k_nyquist - 1u) /
+                                     (double)(AUDIO_SPEC_BINS - 1u));
+        double w = (double)AUDIO_TWO_PI_F * k / (double)n;
+        float hz = (float)(k * (double)BSP_AUDIO_SAMPLE_RATE_HZ / (double)n);
+        float mag;
+
+        for (i = 0; i < n; i++) {
+            /* Hann 窗减轻泄漏 */
+            float hann = 0.5f - 0.5f * cosf((float)AUDIO_TWO_PI_F * (float)i / (float)(n - 1u));
+            float m = 0.5f * (interleaved[2u * i] + interleaved[2u * i + 1u]) * hann;
+            re += (double)m * cos(w * (double)i);
+            im -= (double)m * sin(w * (double)i);
+        }
+        /* 窗使相干增益约 0.5，幅度补偿 ×2；再 ×2/N 为单边谱习惯归一 */
+        mag = (float)(4.0 * sqrt(re * re + im * im) / (double)n);
+        if (mag < bins_io[b] * AUDIO_ENERGY_DECAY) {
+            mag = bins_io[b] * AUDIO_ENERGY_DECAY;
+        }
+        if (mag > 1.0f) {
+            mag = 1.0f;
+        }
+        bins_io[b] = mag;
+        if (mag > peak_mag) {
+            peak_mag = mag;
+            peak_hz = hz;
+        }
+    }
+
+    if (peak_mag < 0.02f) {
+        return 0.0f;
+    }
+    return peak_hz;
+}
+
+static void energy_store_all(const float tx[][AUDIO_FRAME_FLOATS],
+                             const float rx[][AUDIO_FRAME_FLOATS])
 {
     uint8_t i;
     for (i = 0; i < s_tx_cnt; i++) {
-        float rms = calc_rms(s_tx_float[i], AUDIO_FRAME_FLOATS);
+        float rms = calc_rms(tx[i], AUDIO_FRAME_FLOATS);
         if (rms > 1.0f) rms = 1.0f;
         SDL_SetAtomicInt(&s_energy_tx_q15[i], (int)lrintf(rms * 32767.0f));
+        s_pkhz_tx[i] = spectrum_update(tx[i], s_spec_tx[i]);
     }
     for (i = 0; i < s_rx_cnt; i++) {
-        float rms = calc_rms(s_rx_float[i], AUDIO_FRAME_FLOATS);
+        float rms = calc_rms(rx[i], AUDIO_FRAME_FLOATS);
         if (rms > 1.0f) rms = 1.0f;
         SDL_SetAtomicInt(&s_energy_rx_q15[i], (int)lrintf(rms * 32767.0f));
+        s_pkhz_rx[i] = spectrum_update(rx[i], s_spec_rx[i]);
     }
 }
 
@@ -313,116 +433,718 @@ static int debug_text_width(const char* s)
     return n * (int)SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE;
 }
 
-static void draw_energy_bar(struct SDL_Renderer* renderer,
-                            float x, float y, float w, float h,
-                            const char* name, float level, float* peak,
-                            int is_tx)
+static int audio_channel_total(void)
 {
-    float label_w;
-    SDL_FRect track;
+    return (int)s_tx_cnt + (int)s_rx_cnt;
+}
+
+static void audio_meter_rect(int ch_index, float* x, float* y, float* w, float* h)
+{
+    *x = (float)BSP_AUDIO_UI_X;
+    *y = (float)BSP_AUDIO_UI_Y + 22.0f +
+         (float)ch_index * ((float)BSP_AUDIO_METER_H + (float)BSP_AUDIO_METER_GAP);
+    *w = (float)BSP_AUDIO_PANEL_W; /* 与配置页同宽 */
+    *h = (float)BSP_AUDIO_METER_H;
+}
+
+static void audio_panel_rect(float* x, float* y, float* w, float* h)
+{
+    int total = audio_channel_total();
+    float meters_h;
+
+    if (total < 1) {
+        total = 1;
+    }
+    meters_h = (float)total * (float)BSP_AUDIO_METER_H +
+               (float)(total - 1) * (float)BSP_AUDIO_METER_GAP;
+
+    *x = (float)BSP_AUDIO_UI_X;
+    *y = (float)BSP_AUDIO_UI_Y;
+    *w = (float)BSP_AUDIO_PANEL_W;
+    *h = 22.0f + meters_h + 8.0f;
+
+    if (s_ui_mode == AUDIO_UI_CONFIG && *h < 280.0f) {
+        *h = 280.0f;
+    }
+}
+
+static void draw_mini_energy(struct SDL_Renderer* r, float x, float y, float w, float h,
+                             float level, float* peak, int is_tx)
+{
+    SDL_FRect track = { x, y, w, h };
     SDL_FRect fill;
-    const char* label = name ? name : (is_tx ? "TX" : "RX");
 
     if (level > *peak) {
         *peak = level;
     } else {
         *peak *= AUDIO_ENERGY_DECAY;
     }
-
-    label_w = (float)debug_text_width(label) + 8.0f;
-    if (label_w < 28.0f) {
-        label_w = 28.0f;
-    }
-    if (label_w > w * 0.45f) {
-        label_w = w * 0.45f;
+    if (*peak > 1.0f) {
+        *peak = 1.0f;
     }
 
+    SDL_SetRenderDrawColor(r, 40, 46, 54, 255);
+    SDL_RenderFillRect(r, &track);
+
+    fill = track;
+    fill.w = w * (*peak);
     if (is_tx) {
-        SDL_SetRenderDrawColor(renderer, 180, 220, 160, 255);
+        SDL_SetRenderDrawColor(r, 50, 120, 60, 200);
     } else {
-        SDL_SetRenderDrawColor(renderer, 160, 210, 230, 255);
+        SDL_SetRenderDrawColor(r, 40, 100, 140, 200);
     }
-    SDL_RenderDebugText(renderer, x + 2.0f, y + (h - (float)SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE) * 0.5f, label);
+    SDL_RenderFillRect(r, &fill);
 
-    track.x = x + label_w;
-    track.y = y;
-    track.w = w - label_w - 4.0f;
-    track.h = h;
-    if (track.w < 4.0f) {
+    fill.w = w * level;
+    if (is_tx) {
+        SDL_SetRenderDrawColor(r, 90, 220, 110, 255);
+    } else {
+        SDL_SetRenderDrawColor(r, 70, 190, 230, 255);
+    }
+    SDL_RenderFillRect(r, &fill);
+    SDL_SetRenderDrawColor(r, 90, 100, 115, 255);
+    SDL_RenderRect(r, &track);
+}
+
+static void draw_spectrum(struct SDL_Renderer* r, float x, float y, float w, float h,
+                          const float* bins, int is_tx)
+{
+    float gap = 1.0f;
+    float bar_w;
+    uint32_t b;
+    SDL_FRect bg = { x, y, w, h };
+
+    SDL_SetRenderDrawColor(r, 22, 26, 32, 255);
+    SDL_RenderFillRect(r, &bg);
+    SDL_SetRenderDrawColor(r, 55, 62, 72, 255);
+    SDL_RenderRect(r, &bg);
+
+    bar_w = (w - gap * (float)(AUDIO_SPEC_BINS + 1)) / (float)AUDIO_SPEC_BINS;
+    if (bar_w < 1.0f) {
+        bar_w = 1.0f;
+    }
+    for (b = 0; b < AUDIO_SPEC_BINS; b++) {
+        float mag = bins[b];
+        float bh;
+        SDL_FRect bar;
+        if (mag < 0.0f) mag = 0.0f;
+        if (mag > 1.0f) mag = 1.0f;
+        bh = (h - 4.0f) * mag;
+        bar.x = x + gap + (float)b * (bar_w + gap);
+        bar.y = y + h - 2.0f - bh;
+        bar.w = bar_w;
+        bar.h = bh;
+        if (is_tx) {
+            Uint8 g = (Uint8)(80 + (int)(mag * 140.0f));
+            SDL_SetRenderDrawColor(r, 60, g, 80, 255);
+        } else {
+            Uint8 bl = (Uint8)(100 + (int)(mag * 120.0f));
+            SDL_SetRenderDrawColor(r, 50, 140, bl, 255);
+        }
+        SDL_RenderFillRect(r, &bar);
+    }
+}
+
+static void draw_channel_meter(struct SDL_Renderer* r, float x, float y, float w, float h,
+                               const char* name, const char* type_name,
+                               float level, float* peak, float pk_hz,
+                               const float* bins, int is_tx)
+{
+    char line[96];
+    float header_h = 18.0f;
+    float foot_h = 16.0f;
+    float ebar_w;
+    float spec_y;
+    float spec_h;
+    float db;
+    SDL_FRect card = { x, y, w, h };
+
+    SDL_SetRenderDrawColor(r, 28, 32, 38, 255);
+    SDL_RenderFillRect(r, &card);
+    SDL_SetRenderDrawColor(r, is_tx ? 70 : 60, is_tx ? 110 : 100, is_tx ? 80 : 120, 255);
+    SDL_RenderRect(r, &card);
+
+    /* 标题：通道名 + type */
+    snprintf(line, sizeof(line), "%s %s", name ? name : "?", type_name ? type_name : "?");
+    SDL_SetRenderDrawColor(r, 210, 220, 230, 255);
+    SDL_RenderDebugText(r, x + 4.0f, y + 3.0f, line);
+
+    /* 右上角简易能量条 */
+    ebar_w = w * 0.28f;
+    if (ebar_w < 36.0f) {
+        ebar_w = 36.0f;
+    }
+    if (ebar_w > 72.0f) {
+        ebar_w = 72.0f;
+    }
+    draw_mini_energy(r, x + w - ebar_w - 4.0f, y + 3.0f, ebar_w, 12.0f, level, peak, is_tx);
+
+    spec_y = y + header_h;
+    spec_h = h - header_h - foot_h;
+    if (spec_h < 24.0f) {
+        spec_h = 24.0f;
+    }
+    draw_spectrum(r, x + 3.0f, spec_y, w - 6.0f, spec_h, bins, is_tx);
+
+    db = (level > 1.0e-6f) ? (20.0f * log10f(level)) : -80.0f;
+    if (pk_hz >= 1000.0f) {
+        snprintf(line, sizeof(line), "rms:%5.1fdB  pk:%.1fkHz", (double)db,
+                 (double)(pk_hz * 0.001f));
+    } else {
+        snprintf(line, sizeof(line), "rms:%5.1fdB  pk:%.0fHz", (double)db, (double)pk_hz);
+    }
+    SDL_SetRenderDrawColor(r, 160, 170, 185, 255);
+    SDL_RenderDebugText(r, x + 4.0f, y + h - foot_h + 1.0f, line);
+}
+
+/* 仅 FILE 类型可写 file_path：与 sine/gain 等同属 union，乱写会踩参数。 */
+static void bind_live_path_ptrs(void)
+{
+    uint8_t i;
+    for (i = 0; i < s_rx_cnt; i++) {
+        if (s_rx_cfg[i].rx_impl_type == RX_IMPL_TYPE_FILE) {
+            s_rx_cfg[i].config.file.file_path = s_rx_path[i];
+        }
+    }
+    for (i = 0; i < s_tx_cnt; i++) {
+        if (s_tx_cfg[i].tx_impl_type == TX_IMPL_TYPE_FILE) {
+            s_tx_cfg[i].config.file.file_path = s_tx_path[i];
+        }
+    }
+}
+
+static void bind_draft_path_ptrs(void)
+{
+    uint8_t i;
+    for (i = 0; i < s_rx_cnt; i++) {
+        if (s_rx_draft[i].rx_impl_type == RX_IMPL_TYPE_FILE) {
+            s_rx_draft[i].config.file.file_path = s_rx_path_draft[i];
+        }
+    }
+    for (i = 0; i < s_tx_cnt; i++) {
+        if (s_tx_draft[i].tx_impl_type == TX_IMPL_TYPE_FILE) {
+            s_tx_draft[i].config.file.file_path = s_tx_path_draft[i];
+        }
+    }
+}
+
+static char* draft_path_buf_for_sel(void)
+{
+    int is_tx = (s_ui_sel < (int)s_tx_cnt);
+    int idx = is_tx ? s_ui_sel : (s_ui_sel - (int)s_tx_cnt);
+    if (is_tx && idx >= 0 && idx < (int)s_tx_cnt &&
+        s_tx_draft[idx].tx_impl_type == TX_IMPL_TYPE_FILE) {
+        return s_tx_path_draft[idx];
+    }
+    if (!is_tx && idx >= 0 && idx < (int)s_rx_cnt &&
+        s_rx_draft[idx].rx_impl_type == RX_IMPL_TYPE_FILE) {
+        return s_rx_path_draft[idx];
+    }
+    return NULL;
+}
+
+static void path_edit_stop(void)
+{
+    SDL_Window* win = arch_display_window();
+    s_path_editing = 0;
+    if (win) {
+        SDL_StopTextInput(win);
+    }
+}
+
+static void path_edit_start(void)
+{
+    SDL_Window* win = arch_display_window();
+    char* buf = draft_path_buf_for_sel();
+    if (!buf) {
+        return;
+    }
+    s_path_editing = 1;
+    s_caret_blink_ms = (uint32_t)SDL_GetTicks();
+    if (win) {
+        SDL_StartTextInput(win);
+    }
+}
+
+static bool SDLCALL audio_text_event_watch(void* userdata, SDL_Event* event)
+{
+    char* buf;
+    size_t len;
+    (void)userdata;
+
+    if (!s_path_editing || s_ui_mode != AUDIO_UI_CONFIG) {
+        return true;
+    }
+    buf = draft_path_buf_for_sel();
+    if (!buf) {
+        return true;
+    }
+
+    if (event->type == SDL_EVENT_TEXT_INPUT && event->text.text) {
+        len = strlen(buf);
+        SDL_strlcat(buf, event->text.text, AUDIO_PATH_MAX);
+        if (strlen(buf) != len) {
+            arch_display_request_frame();
+        }
+    } else if (event->type == SDL_EVENT_KEY_DOWN) {
+        if (event->key.key == SDLK_BACKSPACE) {
+            len = strlen(buf);
+            if (len > 0) {
+                buf[len - 1] = '\0';
+                arch_display_request_frame();
+            }
+        } else if (event->key.key == SDLK_RETURN || event->key.key == SDLK_KP_ENTER ||
+                   event->key.key == SDLK_ESCAPE) {
+            path_edit_stop();
+            arch_display_request_frame();
+        }
+    }
+    return true;
+}
+
+static int point_in_rect(float px, float py, float x, float y, float w, float h)
+{
+    return (px >= x && px < x + w && py >= y && py < y + h);
+}
+
+/* -------------------------------------------------------------------------- */
+/* 配置页绘制                                                                 */
+/* -------------------------------------------------------------------------- */
+
+static void draw_btn(struct SDL_Renderer* r, float x, float y, float w, float h,
+                     const char* label, int active)
+{
+    SDL_FRect rc = { x, y, w, h };
+    if (active) {
+        SDL_SetRenderDrawColor(r, 70, 120, 160, 255);
+    } else {
+        SDL_SetRenderDrawColor(r, 50, 56, 64, 255);
+    }
+    SDL_RenderFillRect(r, &rc);
+    SDL_SetRenderDrawColor(r, 100, 110, 125, 255);
+    SDL_RenderRect(r, &rc);
+    if (label) {
+        float tw = (float)debug_text_width(label);
+        SDL_SetRenderDrawColor(r, 220, 230, 240, 255);
+        SDL_RenderDebugText(r, x + (w - tw) * 0.5f,
+                            y + (h - (float)SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE) * 0.5f,
+                            label);
+    }
+}
+
+/* type 按钮自动换行：放不下就另起一行，避免超出配置子区宽度。
+ * 返回下一内容行的 y（末行底 + 间距）。 */
+static float draw_type_btn_wrap(struct SDL_Renderer* r,
+                                float x, float y, float area_w,
+                                float btn_w, float btn_h, float gap,
+                                const char* const* labels, const int* active, int n)
+{
+    float cx = x;
+    float cy = y;
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (i > 0 && (cx + btn_w) > (x + area_w + 0.5f)) {
+            cx = x;
+            cy += btn_h + gap;
+        }
+        draw_btn(r, cx, cy, btn_w, btn_h, labels[i], active ? active[i] : 0);
+        cx += btn_w + gap;
+    }
+    return cy + btn_h + 6.0f;
+}
+
+/* 与 draw_type_btn_wrap 同布局做命中；命中返回按钮下标，否则 -1。
+ * *io_y 为按钮区起始 y，返回后推进到下一内容行 y。 */
+static int hit_type_btn_wrap(float px, float py,
+                             float x, float* io_y, float area_w,
+                             float btn_w, float btn_h, float gap, int n)
+{
+    float cx = x;
+    float cy = *io_y;
+    float end_y = cy;
+    int i;
+    int hit = -1;
+
+    for (i = 0; i < n; i++) {
+        if (i > 0 && (cx + btn_w) > (x + area_w + 0.5f)) {
+            cx = x;
+            cy += btn_h + gap;
+        }
+        if (point_in_rect(px, py, cx, cy, btn_w, btn_h)) {
+            hit = i;
+        }
+        end_y = cy + btn_h;
+        cx += btn_w + gap;
+    }
+    *io_y = end_y + 6.0f;
+    return hit;
+}
+
+static const char* rx_type_name(rx_impl_type_e t)
+{
+    switch (t) {
+        case RX_IMPL_TYPE_NONE: return "NONE";
+        case RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK: return "SYS SPK";
+        case RX_IMPL_TYPE_SYSTEM_MIC: return "SYS MIC";
+        case RX_IMPL_TYPE_FILE: return "FILE";
+        case RX_IMPL_TYPE_SINE_WAVE: return "SINE";
+        default: return "?";
+    }
+}
+
+static const char* tx_type_name(tx_impl_type_e t)
+{
+    switch (t) {
+        case TX_IMPL_TYPE_NONE: return "NONE";
+        case TX_IMPL_TYPE_FILE: return "FILE";
+        case TX_IMPL_TYPE_SYSTEM_OUTPUT: return "SYS";
+        default: return "?";
+    }
+}
+
+/* 切到某 type 时写入内置默认；同 type 再点只保证 path 指针绑定。 */
+static void ensure_rx_type_defaults(bsp_audio_system_rx_map_t* m, rx_impl_type_e t, char* path_buf)
+{
+    int changed = (m->rx_impl_type != t);
+    m->rx_impl_type = t;
+    if (!changed) {
+        if (t == RX_IMPL_TYPE_FILE) {
+            m->config.file.file_path = path_buf;
+        }
         return;
     }
 
-    SDL_SetRenderDrawColor(renderer, 45, 52, 60, 255);
-    SDL_RenderFillRect(renderer, &track);
-
-    fill = track;
-    fill.w = track.w * (*peak);
-    if (is_tx) {
-        SDL_SetRenderDrawColor(renderer, 60, 140, 70, 180);
-    } else {
-        SDL_SetRenderDrawColor(renderer, 40, 110, 150, 180);
+    memset(&m->config, 0, sizeof(m->config));
+    if (t == RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK) {
+        m->config.system_output_loopback.gain = AUDIO_DEFAULT_GAIN;
+    } else if (t == RX_IMPL_TYPE_SYSTEM_MIC) {
+        m->config.system_mic.gain = AUDIO_DEFAULT_GAIN;
+    } else if (t == RX_IMPL_TYPE_FILE) {
+        SDL_strlcpy(path_buf, AUDIO_DEFAULT_RX_WAV_PATH, AUDIO_PATH_MAX);
+        m->config.file.file_path = path_buf;
+        m->config.file.gain = AUDIO_DEFAULT_GAIN;
+        m->config.file.loop = 1;
+        m->config.file.loop_cnt = 0;
+    } else if (t == RX_IMPL_TYPE_SINE_WAVE) {
+        m->config.sine_wave.frequency = AUDIO_DEFAULT_SINE_FREQ_HZ;
+        m->config.sine_wave.amplitude = AUDIO_DEFAULT_SINE_AMP;
     }
-    SDL_RenderFillRect(renderer, &fill);
+}
 
-    fill.w = track.w * level;
-    if (is_tx) {
-        SDL_SetRenderDrawColor(renderer, 90, 220, 110, 255);
-    } else {
-        SDL_SetRenderDrawColor(renderer, 70, 190, 230, 255);
+static void ensure_tx_type_defaults(bsp_audio_system_tx_map_t* m, tx_impl_type_e t, char* path_buf)
+{
+    int changed = (m->tx_impl_type != t);
+    m->tx_impl_type = t;
+    if (!changed) {
+        if (t == TX_IMPL_TYPE_FILE) {
+            m->config.file.file_path = path_buf;
+        }
+        return;
     }
-    SDL_RenderFillRect(renderer, &fill);
+
+    memset(&m->config, 0, sizeof(m->config));
+    if (t == TX_IMPL_TYPE_FILE) {
+        SDL_strlcpy(path_buf, AUDIO_DEFAULT_TX_WAV_PATH, AUDIO_PATH_MAX);
+        m->config.file.file_path = path_buf;
+        m->config.file.gain = AUDIO_DEFAULT_GAIN;
+    } else if (t == TX_IMPL_TYPE_SYSTEM_OUTPUT) {
+        m->config.system_output.gain = AUDIO_DEFAULT_GAIN;
+    }
+}
+
+static void render_config_page(struct SDL_Renderer* renderer)
+{
+    float x, y, w, h;
+    float list_w;
+    float row_h = 18.0f;
+    float btn_h = 18.0f;
+    float btn_w = 44.0f;
+    float gap = 4.0f;
+    float right_x;
+    float cy;
+    char line[AUDIO_PATH_MAX + 8];
+    int i;
+    int total = (int)s_tx_cnt + (int)s_rx_cnt;
+    int sel = s_ui_sel;
+    int is_tx_sel;
+    int ch_idx;
+
+    audio_panel_rect(&x, &y, &w, &h);
+    {
+        SDL_FRect bg = { x, y, w, h };
+        SDL_SetRenderDrawColor(renderer, 28, 32, 38, 255);
+        SDL_RenderFillRect(renderer, &bg);
+        SDL_SetRenderDrawColor(renderer, 90, 100, 115, 255);
+        SDL_RenderRect(renderer, &bg);
+    }
+
+    SDL_SetRenderDrawColor(renderer, 220, 230, 240, 255);
+    SDL_RenderDebugText(renderer, x + 6.0f, y + 4.0f, "AUDIO CFG");
+    draw_btn(renderer, x + w - 28.0f, y + 2.0f, 22.0f, 16.0f, "X", 0);
+
+    list_w = 72.0f;
+    right_x = x + list_w + 8.0f;
+    cy = y + 22.0f;
+
+    for (i = 0; i < total; i++) {
+        char lab[16];
+        int active = (i == sel);
+        if (i < (int)s_tx_cnt) {
+            snprintf(lab, sizeof(lab), "TX%u", (unsigned)i);
+        } else {
+            snprintf(lab, sizeof(lab), "RX%u", (unsigned)(i - (int)s_tx_cnt));
+        }
+        draw_btn(renderer, x + 4.0f, cy, list_w - 8.0f, row_h, lab, active);
+        cy += row_h + 2.0f;
+    }
+
+    is_tx_sel = (sel < (int)s_tx_cnt);
+    ch_idx = is_tx_sel ? sel : (sel - (int)s_tx_cnt);
+    cy = y + 22.0f;
+
+    if (is_tx_sel && ch_idx >= 0 && ch_idx < (int)s_tx_cnt) {
+        bsp_audio_system_tx_map_t* d = &s_tx_draft[ch_idx];
+        const char* tx_labs[3] = { "NONE", "FILE", "SYS" };
+        int tx_act[3] = {
+            d->tx_impl_type == TX_IMPL_TYPE_NONE,
+            d->tx_impl_type == TX_IMPL_TYPE_FILE,
+            d->tx_impl_type == TX_IMPL_TYPE_SYSTEM_OUTPUT
+        };
+        float type_area_w = w - (right_x - x) - 8.0f;
+
+        SDL_SetRenderDrawColor(renderer, 200, 210, 220, 255);
+        snprintf(line, sizeof(line), "TX '%s' type=%s",
+                 d->name ? d->name : "?", tx_type_name(d->tx_impl_type));
+        SDL_RenderDebugText(renderer, right_x, cy, line);
+        cy += 16.0f;
+        cy = draw_type_btn_wrap(renderer, right_x, cy, type_area_w, btn_w, btn_h, gap,
+                                tx_labs, tx_act, 3);
+
+        if (d->tx_impl_type == TX_IMPL_TYPE_FILE) {
+            SDL_FRect path_box = { right_x, cy, w - (right_x - x) - 8.0f, AUDIO_PATH_FIELD_H };
+            if (path_box.w < 80.0f) {
+                path_box.w = 80.0f;
+            }
+            if (s_path_editing) {
+                SDL_SetRenderDrawColor(renderer, 55, 70, 90, 255);
+            } else {
+                SDL_SetRenderDrawColor(renderer, 40, 46, 54, 255);
+            }
+            SDL_RenderFillRect(renderer, &path_box);
+            SDL_SetRenderDrawColor(renderer, 110, 120, 135, 255);
+            SDL_RenderRect(renderer, &path_box);
+            {
+                const char* p = s_tx_path_draft[ch_idx];
+                size_t plen = strlen(p);
+                size_t max_chars = (size_t)((path_box.w - 6.0f) /
+                                            (float)SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE);
+                int blink = (((uint32_t)SDL_GetTicks() - s_caret_blink_ms) / 400u) & 1u;
+                if (max_chars < 4u) {
+                    max_chars = 4u;
+                }
+                if (max_chars >= sizeof(line)) {
+                    max_chars = sizeof(line) - 1u;
+                }
+                if (s_path_editing && blink) {
+                    if (plen + 1u > max_chars) {
+                        snprintf(line, sizeof(line), "...%s|",
+                                 p + (plen - (max_chars - 4u)));
+                    } else {
+                        snprintf(line, sizeof(line), "%s|", p);
+                    }
+                } else if (plen > max_chars) {
+                    snprintf(line, sizeof(line), "...%s",
+                             p + (plen - (max_chars - 3u)));
+                } else {
+                    snprintf(line, sizeof(line), "%s", p);
+                }
+                SDL_SetRenderDrawColor(renderer, 220, 230, 240, 255);
+                SDL_RenderDebugText(renderer, path_box.x + 3.0f,
+                                    path_box.y + (path_box.h - (float)SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE) * 0.5f,
+                                    line);
+            }
+            cy += AUDIO_PATH_FIELD_H + 4.0f;
+            snprintf(line, sizeof(line), "gain:%.2f", (double)d->config.file.gain);
+            SDL_SetRenderDrawColor(renderer, 180, 190, 200, 255);
+            SDL_RenderDebugText(renderer, right_x, cy, line);
+            draw_btn(renderer, right_x + 100.0f, cy - 2.0f, 22.0f, btn_h, "-", 0);
+            draw_btn(renderer, right_x + 126.0f, cy - 2.0f, 22.0f, btn_h, "+", 0);
+        } else if (d->tx_impl_type == TX_IMPL_TYPE_SYSTEM_OUTPUT) {
+            snprintf(line, sizeof(line), "gain:%.2f", (double)d->config.system_output.gain);
+            SDL_SetRenderDrawColor(renderer, 180, 190, 200, 255);
+            SDL_RenderDebugText(renderer, right_x, cy, line);
+            draw_btn(renderer, right_x + 100.0f, cy - 2.0f, 22.0f, btn_h, "-", 0);
+            draw_btn(renderer, right_x + 126.0f, cy - 2.0f, 22.0f, btn_h, "+", 0);
+        }
+    } else if (!is_tx_sel && ch_idx >= 0 && ch_idx < (int)s_rx_cnt) {
+        bsp_audio_system_rx_map_t* d = &s_rx_draft[ch_idx];
+        const char* rx_labs[5] = { "NONE", "SPK", "MIC", "FILE", "SINE" };
+        int rx_act[5] = {
+            d->rx_impl_type == RX_IMPL_TYPE_NONE,
+            d->rx_impl_type == RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK,
+            d->rx_impl_type == RX_IMPL_TYPE_SYSTEM_MIC,
+            d->rx_impl_type == RX_IMPL_TYPE_FILE,
+            d->rx_impl_type == RX_IMPL_TYPE_SINE_WAVE
+        };
+        float type_area_w = w - (right_x - x) - 8.0f;
+
+        SDL_SetRenderDrawColor(renderer, 200, 210, 220, 255);
+        snprintf(line, sizeof(line), "RX '%s' type=%s",
+                 d->name ? d->name : "?", rx_type_name(d->rx_impl_type));
+        SDL_RenderDebugText(renderer, right_x, cy, line);
+        cy += 16.0f;
+        cy = draw_type_btn_wrap(renderer, right_x, cy, type_area_w, btn_w, btn_h, gap,
+                                rx_labs, rx_act, 5);
+
+        if (d->rx_impl_type == RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK ||
+            d->rx_impl_type == RX_IMPL_TYPE_SYSTEM_MIC) {
+            float g = (d->rx_impl_type == RX_IMPL_TYPE_SYSTEM_MIC)
+                          ? d->config.system_mic.gain
+                          : d->config.system_output_loopback.gain;
+            snprintf(line, sizeof(line), "gain:%.2f", (double)g);
+            SDL_SetRenderDrawColor(renderer, 180, 190, 200, 255);
+            SDL_RenderDebugText(renderer, right_x, cy, line);
+            draw_btn(renderer, right_x + 100.0f, cy - 2.0f, 22.0f, btn_h, "-", 0);
+            draw_btn(renderer, right_x + 126.0f, cy - 2.0f, 22.0f, btn_h, "+", 0);
+        } else if (d->rx_impl_type == RX_IMPL_TYPE_FILE) {
+            SDL_FRect path_box = { right_x, cy, w - (right_x - x) - 8.0f, AUDIO_PATH_FIELD_H };
+            if (path_box.w < 80.0f) {
+                path_box.w = 80.0f;
+            }
+            if (s_path_editing) {
+                SDL_SetRenderDrawColor(renderer, 55, 70, 90, 255);
+            } else {
+                SDL_SetRenderDrawColor(renderer, 40, 46, 54, 255);
+            }
+            SDL_RenderFillRect(renderer, &path_box);
+            SDL_SetRenderDrawColor(renderer, 110, 120, 135, 255);
+            SDL_RenderRect(renderer, &path_box);
+            {
+                const char* p = s_rx_path_draft[ch_idx];
+                size_t plen = strlen(p);
+                size_t max_chars = (size_t)((path_box.w - 6.0f) /
+                                            (float)SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE);
+                int blink = (((uint32_t)SDL_GetTicks() - s_caret_blink_ms) / 400u) & 1u;
+                if (max_chars < 4u) {
+                    max_chars = 4u;
+                }
+                if (max_chars >= sizeof(line)) {
+                    max_chars = sizeof(line) - 1u;
+                }
+                if (s_path_editing && blink) {
+                    if (plen + 1u > max_chars) {
+                        snprintf(line, sizeof(line), "...%s|",
+                                 p + (plen - (max_chars - 4u)));
+                    } else {
+                        snprintf(line, sizeof(line), "%s|", p);
+                    }
+                } else if (plen > max_chars) {
+                    snprintf(line, sizeof(line), "...%s",
+                             p + (plen - (max_chars - 3u)));
+                } else {
+                    snprintf(line, sizeof(line), "%s", p);
+                }
+                SDL_SetRenderDrawColor(renderer, 220, 230, 240, 255);
+                SDL_RenderDebugText(renderer, path_box.x + 3.0f,
+                                    path_box.y + (path_box.h - (float)SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE) * 0.5f,
+                                    line);
+            }
+            cy += AUDIO_PATH_FIELD_H + 4.0f;
+            snprintf(line, sizeof(line), "gain:%.2f loop:%u",
+                     (double)d->config.file.gain, (unsigned)d->config.file.loop);
+            SDL_SetRenderDrawColor(renderer, 180, 190, 200, 255);
+            SDL_RenderDebugText(renderer, right_x, cy, line);
+            draw_btn(renderer, right_x + 100.0f, cy - 2.0f, 22.0f, btn_h, "-", 0);
+            draw_btn(renderer, right_x + 126.0f, cy - 2.0f, 22.0f, btn_h, "+", 0);
+            draw_btn(renderer, right_x + 154.0f, cy - 2.0f, 40.0f, btn_h, "LOOP",
+                     (int)d->config.file.loop);
+        } else if (d->rx_impl_type == RX_IMPL_TYPE_SINE_WAVE) {
+            snprintf(line, sizeof(line), "freq:%.0f amp:%.2f",
+                     (double)d->config.sine_wave.frequency,
+                     (double)d->config.sine_wave.amplitude);
+            SDL_SetRenderDrawColor(renderer, 180, 190, 200, 255);
+            SDL_RenderDebugText(renderer, right_x, cy, line);
+            cy += 16.0f;
+            draw_btn(renderer, right_x, cy, 28.0f, btn_h, "F-", 0);
+            draw_btn(renderer, right_x + 32.0f, cy, 28.0f, btn_h, "F+", 0);
+            draw_btn(renderer, right_x + 68.0f, cy, 28.0f, btn_h, "A-", 0);
+            draw_btn(renderer, right_x + 100.0f, cy, 28.0f, btn_h, "A+", 0);
+        }
+    }
+
+    draw_btn(renderer, x + w - 120.0f, y + h - 22.0f, 52.0f, 18.0f, "APPLY", 1);
+    draw_btn(renderer, x + w - 62.0f, y + h - 22.0f, 52.0f, 18.0f, "CLOSE", 0);
+}
+
+static void render_energy_page(struct SDL_Renderer* renderer)
+{
+    float panel_x, panel_y, panel_w, panel_h;
+    float mx, my, mw, mh;
+    int total = audio_channel_total();
+    int idx = 0;
+    uint8_t i;
+    SDL_FRect hdr;
+
+    if (total <= 0) {
+        return;
+    }
+
+    audio_panel_rect(&panel_x, &panel_y, &panel_w, &panel_h);
+    hdr.x = panel_x;
+    hdr.y = panel_y;
+    hdr.w = panel_w;
+    hdr.h = 20.0f;
+    SDL_SetRenderDrawColor(renderer, 32, 36, 44, 255);
+    SDL_RenderFillRect(renderer, &hdr);
+    SDL_SetRenderDrawColor(renderer, 200, 210, 220, 255);
+    SDL_RenderDebugText(renderer, panel_x + 4.0f, panel_y + 4.0f, "AUDIO");
+    SDL_SetRenderDrawColor(renderer, 130, 140, 155, 255);
+    SDL_RenderDebugText(renderer, panel_x + panel_w - (float)debug_text_width("click:cfg") - 4.0f,
+                        panel_y + 4.0f, "click:cfg");
+
+    for (i = 0; i < s_tx_cnt; i++, idx++) {
+        float lv = (float)SDL_GetAtomicInt(&s_energy_tx_q15[i]) / 32767.0f;
+        audio_meter_rect(idx, &mx, &my, &mw, &mh);
+        draw_channel_meter(renderer, mx, my, mw, mh,
+                           s_tx[i].map->name,
+                           tx_type_name(s_tx[i].map->tx_impl_type),
+                           lv, &s_peak_tx[i], s_pkhz_tx[i], s_spec_tx[i], 1);
+    }
+    for (i = 0; i < s_rx_cnt; i++, idx++) {
+        float lv = (float)SDL_GetAtomicInt(&s_energy_rx_q15[i]) / 32767.0f;
+        audio_meter_rect(idx, &mx, &my, &mw, &mh);
+        draw_channel_meter(renderer, mx, my, mw, mh,
+                           s_rx[i].map->name,
+                           rx_type_name(s_rx[i].map->rx_impl_type),
+                           lv, &s_peak_rx[i], s_pkhz_rx[i], s_spec_rx[i], 0);
+    }
 }
 
 static void audio_render_cb(struct SDL_Renderer* renderer, void* ctx)
 {
-    const float x = (float)BSP_AUDIO_ENERGY_X;
-    const float y = (float)BSP_AUDIO_ENERGY_Y;
-    const float w = (float)BSP_AUDIO_ENERGY_W;
-    const float h = (float)BSP_AUDIO_ENERGY_H;
-    const int total = (int)s_tx_cnt + (int)s_rx_cnt;
-    float gap;
-    float bar_h;
-    float cursor_y;
-    SDL_FRect bg;
-    uint8_t i;
-
+    audio_ui_mode_e mode;
     (void)ctx;
-    if (!renderer || !s_initialized || total <= 0) {
+    if (!renderer || !s_initialized) {
         return;
     }
-
-    bg.x = x;
-    bg.y = y;
-    bg.w = w;
-    bg.h = h;
-    SDL_SetRenderDrawColor(renderer, 30, 34, 40, 255);
-    SDL_RenderFillRect(renderer, &bg);
-    SDL_SetRenderDrawColor(renderer, 70, 80, 95, 255);
-    SDL_RenderRect(renderer, &bg);
-
-    gap = 3.0f;
-    bar_h = (h - gap * (float)(total + 1)) / (float)total;
-    if (bar_h < 6.0f) {
-        bar_h = 6.0f;
+    if (s_ui_lock) {
+        SDL_LockMutex(s_ui_lock);
     }
-    cursor_y = y + gap;
-
-    for (i = 0; i < s_tx_cnt; i++) {
-        float lv = (float)SDL_GetAtomicInt(&s_energy_tx_q15[i]) / 32767.0f;
-        draw_energy_bar(renderer, x + 4.0f, cursor_y, w - 8.0f, bar_h,
-                        s_tx[i].map->name, lv, &s_peak_tx[i], 1);
-        cursor_y += bar_h + gap;
+    mode = s_ui_mode;
+    if (s_ui_lock) {
+        SDL_UnlockMutex(s_ui_lock);
     }
-    for (i = 0; i < s_rx_cnt; i++) {
-        float lv = (float)SDL_GetAtomicInt(&s_energy_rx_q15[i]) / 32767.0f;
-        draw_energy_bar(renderer, x + 4.0f, cursor_y, w - 8.0f, bar_h,
-                        s_rx[i].map->name, lv, &s_peak_rx[i], 0);
-        cursor_y += bar_h + gap;
+
+    if (mode == AUDIO_UI_CONFIG) {
+        render_config_page(renderer);
+    } else {
+        render_energy_page(renderer);
     }
 }
 
 /* -------------------------------------------------------------------------- */
-/* RX：loopback / file                                                        */
+/* RX / TX open-close / reopen                                                */
 /* -------------------------------------------------------------------------- */
 
 static SDL_AudioDeviceID find_system_output_loopback(void)
@@ -480,12 +1202,10 @@ static int rx_file_feed_stream(rx_runtime_t* rx)
     return 0;
 }
 
-static int rx_open_loopback(rx_runtime_t* rx)
+static int rx_open_recording_device(rx_runtime_t* rx, SDL_AudioDeviceID id, const char* kind)
 {
     SDL_AudioSpec spec;
-    SDL_AudioDeviceID id;
 
-    id = find_system_output_loopback();
     if (!id) {
         return -1;
     }
@@ -497,18 +1217,29 @@ static int rx_open_loopback(rx_runtime_t* rx)
 
     rx->stream = SDL_OpenAudioDeviceStream(id, &spec, NULL, NULL);
     if (!rx->stream) {
-        ERROR_LOG("open RX loopback '%s' failed: %s",
-                  rx->map->name ? rx->map->name : "?", SDL_GetError());
+        ERROR_LOG("open RX %s '%s' failed: %s",
+                  kind, rx->map->name ? rx->map->name : "?", SDL_GetError());
         return -1;
     }
     if (!SDL_ResumeAudioStreamDevice(rx->stream)) {
-        ERROR_LOG("resume RX loopback '%s' failed: %s",
-                  rx->map->name ? rx->map->name : "?", SDL_GetError());
+        ERROR_LOG("resume RX %s '%s' failed: %s",
+                  kind, rx->map->name ? rx->map->name : "?", SDL_GetError());
         SDL_DestroyAudioStream(rx->stream);
         rx->stream = NULL;
         return -1;
     }
+    INFO_LOG("RX '%s' %s opened", rx->map->name ? rx->map->name : "?", kind);
     return 0;
+}
+
+static int rx_open_loopback(rx_runtime_t* rx)
+{
+    return rx_open_recording_device(rx, find_system_output_loopback(), "SYS SPK");
+}
+
+static int rx_open_mic(rx_runtime_t* rx)
+{
+    return rx_open_recording_device(rx, SDL_AUDIO_DEVICE_DEFAULT_RECORDING, "SYS MIC");
 }
 
 static int rx_open_file(rx_runtime_t* rx)
@@ -574,6 +1305,116 @@ static void rx_close(rx_runtime_t* rx)
     rx->sine_phase = 0.0f;
 }
 
+static int rx_open_by_cfg(rx_runtime_t* rx)
+{
+    if (rx->map->rx_impl_type == RX_IMPL_TYPE_NONE) {
+        INFO_LOG("RX '%s' NONE", rx->map->name ? rx->map->name : "?");
+        return 0;
+    }
+    if (rx->map->rx_impl_type == RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK) {
+        return rx_open_loopback(rx);
+    }
+    if (rx->map->rx_impl_type == RX_IMPL_TYPE_SYSTEM_MIC) {
+        return rx_open_mic(rx);
+    }
+    if (rx->map->rx_impl_type == RX_IMPL_TYPE_FILE) {
+        return rx_open_file(rx);
+    }
+    if (rx->map->rx_impl_type == RX_IMPL_TYPE_SINE_WAVE) {
+        rx->sine_phase = 0.0f;
+        INFO_LOG("RX '%s' sine %.1f Hz amp=%.3f",
+                 rx->map->name ? rx->map->name : "?",
+                 (double)rx->map->config.sine_wave.frequency,
+                 (double)rx->map->config.sine_wave.amplitude);
+        return 0;
+    }
+    ERROR_LOG("RX unknown type=%u", (unsigned)rx->map->rx_impl_type);
+    return -1;
+}
+
+static int rx_reopen(uint8_t idx)
+{
+    if (idx >= s_rx_cnt) {
+        return -1;
+    }
+    rx_close(&s_rx[idx]);
+    return rx_open_by_cfg(&s_rx[idx]);
+}
+
+static int tx_open_system_output(tx_runtime_t* tx)
+{
+    SDL_AudioSpec spec;
+
+    memset(&spec, 0, sizeof(spec));
+    spec.format = SDL_AUDIO_F32;
+    spec.channels = (int)BSP_AUDIO_CHANNELS;
+    spec.freq = (int)BSP_AUDIO_SAMPLE_RATE_HZ;
+
+    tx->play = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+    if (!tx->play) {
+        ERROR_LOG("TX '%s' open system output failed: %s",
+                  tx->map->name ? tx->map->name : "?", SDL_GetError());
+        return -1;
+    }
+    if (!SDL_ResumeAudioStreamDevice(tx->play)) {
+        ERROR_LOG("TX '%s' resume system output failed: %s",
+                  tx->map->name ? tx->map->name : "?", SDL_GetError());
+        SDL_DestroyAudioStream(tx->play);
+        tx->play = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+static void tx_close(tx_runtime_t* tx)
+{
+    wav_close(&tx->wav);
+    if (tx->play) {
+        SDL_DestroyAudioStream(tx->play);
+        tx->play = NULL;
+    }
+}
+
+static int tx_open_by_cfg(tx_runtime_t* tx)
+{
+    if (tx->map->tx_impl_type == TX_IMPL_TYPE_NONE) {
+        INFO_LOG("TX '%s' NONE", tx->map->name ? tx->map->name : "?");
+        return 0;
+    }
+    if (tx->map->tx_impl_type == TX_IMPL_TYPE_FILE) {
+        const char* path = tx->map->config.file.file_path;
+        if (!path || !path[0]) {
+            ERROR_LOG("TX '%s': empty file_path", tx->map->name ? tx->map->name : "?");
+            return -1;
+        }
+        if (wav_open(&tx->wav, path, BSP_AUDIO_SAMPLE_RATE_HZ, (uint16_t)BSP_AUDIO_CHANNELS) != 0) {
+            return -1;
+        }
+        INFO_LOG("TX '%s' file -> '%s'", tx->map->name ? tx->map->name : "?", path);
+        return 0;
+    }
+    if (tx->map->tx_impl_type == TX_IMPL_TYPE_SYSTEM_OUTPUT) {
+        if (tx_open_system_output(tx) != 0) {
+            return -1;
+        }
+        INFO_LOG("TX '%s' system output gain=%.3f",
+                 tx->map->name ? tx->map->name : "?",
+                 (double)tx->map->config.system_output.gain);
+        return 0;
+    }
+    ERROR_LOG("TX unknown type=%u", (unsigned)tx->map->tx_impl_type);
+    return -1;
+}
+
+static int tx_reopen(uint8_t idx)
+{
+    if (idx >= s_tx_cnt) {
+        return -1;
+    }
+    tx_close(&s_tx[idx]);
+    return tx_open_by_cfg(&s_tx[idx]);
+}
+
 static void apply_gain(float* buf, uint32_t n, float gain)
 {
     uint32_t i;
@@ -589,6 +1430,9 @@ static float rx_gain_of(const rx_runtime_t* rx)
 {
     if (rx->map->rx_impl_type == RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK) {
         return rx->map->config.system_output_loopback.gain;
+    }
+    if (rx->map->rx_impl_type == RX_IMPL_TYPE_SYSTEM_MIC) {
+        return rx->map->config.system_mic.gain;
     }
     if (rx->map->rx_impl_type == RX_IMPL_TYPE_FILE) {
         return rx->map->config.file.gain;
@@ -617,7 +1461,7 @@ static int rx_pull_sine_frame(rx_runtime_t* rx, float* dst)
         dst[2u * n] = s;
         dst[2u * n + 1u] = s;
         phase += step;
-        if (phase >= AUDIO_TWO_PI_F) {
+        while (phase >= AUDIO_TWO_PI_F) {
             phase -= AUDIO_TWO_PI_F;
         }
     }
@@ -625,7 +1469,6 @@ static int rx_pull_sine_frame(rx_runtime_t* rx, float* dst)
     return 1;
 }
 
-/* 尽量凑满一帧；不足则静音补齐。返回 1=本通道本帧有真实数据。 */
 static int rx_pull_stream_frame(rx_runtime_t* rx, float* dst)
 {
     float temp[AUDIO_FRAME_FLOATS];
@@ -694,52 +1537,40 @@ static int rx_pull_stream_frame(rx_runtime_t* rx, float* dst)
 
 static int rx_pull_frame(rx_runtime_t* rx, float* dst)
 {
+    if (rx->map->rx_impl_type == RX_IMPL_TYPE_NONE) {
+        memset(dst, 0, AUDIO_FRAME_BYTES);
+        return 0;
+    }
     if (rx->map->rx_impl_type == RX_IMPL_TYPE_SINE_WAVE) {
         return rx_pull_sine_frame(rx, dst);
     }
     return rx_pull_stream_frame(rx, dst);
 }
 
-/* -------------------------------------------------------------------------- */
-/* TX：file / system_output                                                   */
-/* -------------------------------------------------------------------------- */
-
-static int tx_open_system_output(tx_runtime_t* tx)
+/* 系统播放队列是否还能再收一帧；满则追帧应停表，禁止丢帧抢时钟。 */
+static int tx_sys_can_accept_frame(void)
 {
-    SDL_AudioSpec spec;
+    uint8_t i;
+    const int limit = (int)((AUDIO_TX_PLAY_MAX_QUEUED_FRAMES - AUDIO_TX_PLAY_CATCHUP_HEADROOM) *
+                            AUDIO_FRAME_BYTES);
 
-    memset(&spec, 0, sizeof(spec));
-    spec.format = SDL_AUDIO_F32;
-    spec.channels = (int)BSP_AUDIO_CHANNELS;
-    spec.freq = (int)BSP_AUDIO_SAMPLE_RATE_HZ;
-
-    tx->play = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
-    if (!tx->play) {
-        ERROR_LOG("TX '%s' open system output failed: %s",
-                  tx->map->name ? tx->map->name : "?", SDL_GetError());
-        return -1;
+    for (i = 0; i < s_tx_cnt; i++) {
+        if (s_tx[i].map->tx_impl_type != TX_IMPL_TYPE_SYSTEM_OUTPUT || !s_tx[i].play) {
+            continue;
+        }
+        if (SDL_GetAudioStreamQueued(s_tx[i].play) > limit) {
+            return 0;
+        }
     }
-    if (!SDL_ResumeAudioStreamDevice(tx->play)) {
-        ERROR_LOG("TX '%s' resume system output failed: %s",
-                  tx->map->name ? tx->map->name : "?", SDL_GetError());
-        SDL_DestroyAudioStream(tx->play);
-        tx->play = NULL;
-        return -1;
-    }
-    return 0;
-}
-
-static void tx_close(tx_runtime_t* tx)
-{
-    wav_close(&tx->wav);
-    if (tx->play) {
-        SDL_DestroyAudioStream(tx->play);
-        tx->play = NULL;
-    }
+    return 1;
 }
 
 static void tx_push_frame(tx_runtime_t* tx, const float* interleaved)
 {
+    if (tx->map->tx_impl_type == TX_IMPL_TYPE_NONE) {
+        return;
+    }
+
     if (tx->map->tx_impl_type == TX_IMPL_TYPE_FILE) {
         (void)wav_write_float_frame(&tx->wav, interleaved, AUDIO_FRAME_FLOATS,
                                     tx->map->config.file.gain);
@@ -750,12 +1581,6 @@ static void tx_push_frame(tx_runtime_t* tx, const float* interleaved)
         float gain = tx->map->config.system_output.gain;
         float scaled[AUDIO_FRAME_FLOATS];
         const float* src = interleaved;
-        int queued = SDL_GetAudioStreamQueued(tx->play);
-
-        /* 避免堆积过大延迟：队列超过上限则丢本帧 */
-        if (queued > (int)(AUDIO_TX_PLAY_MAX_QUEUED_FRAMES * AUDIO_FRAME_BYTES)) {
-            return;
-        }
 
         if (gain != 1.0f) {
             uint32_t i;
@@ -772,24 +1597,424 @@ static void tx_push_frame(tx_runtime_t* tx, const float* interleaved)
 }
 
 /* -------------------------------------------------------------------------- */
+/* 配置 APPLY / UI 点击                                                       */
+/* -------------------------------------------------------------------------- */
+
+static void ui_enter_config(void)
+{
+    uint8_t i;
+    memcpy(s_rx_draft, s_rx_cfg, sizeof(bsp_audio_system_rx_map_t) * s_rx_cnt);
+    memcpy(s_tx_draft, s_tx_cfg, sizeof(bsp_audio_system_tx_map_t) * s_tx_cnt);
+    for (i = 0; i < s_rx_cnt; i++) {
+        SDL_strlcpy(s_rx_path_draft[i], s_rx_path[i], AUDIO_PATH_MAX);
+    }
+    for (i = 0; i < s_tx_cnt; i++) {
+        SDL_strlcpy(s_tx_path_draft[i], s_tx_path[i], AUDIO_PATH_MAX);
+    }
+    bind_draft_path_ptrs();
+    s_ui_sel = 0;
+    s_path_editing = 0;
+    s_ui_mode = AUDIO_UI_CONFIG;
+    arch_display_request_frame();
+}
+
+static int rx_need_reopen(uint8_t i)
+{
+    if (s_rx_cfg[i].rx_impl_type != s_rx_draft[i].rx_impl_type) {
+        return 1;
+    }
+    if (s_rx_draft[i].rx_impl_type == RX_IMPL_TYPE_FILE &&
+        strcmp(s_rx_path[i], s_rx_path_draft[i]) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int tx_need_reopen(uint8_t i)
+{
+    if (s_tx_cfg[i].tx_impl_type != s_tx_draft[i].tx_impl_type) {
+        return 1;
+    }
+    if (s_tx_draft[i].tx_impl_type == TX_IMPL_TYPE_FILE &&
+        strcmp(s_tx_path[i], s_tx_path_draft[i]) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static void ui_close_config(int apply)
+{
+    uint8_t i;
+
+    path_edit_stop();
+
+    if (apply) {
+        SDL_LockMutex(s_lock);
+        for (i = 0; i < s_rx_cnt; i++) {
+            int reopen = rx_need_reopen(i);
+            bsp_audio_system_rx_map_t backup = s_rx_cfg[i];
+            char path_backup[AUDIO_PATH_MAX];
+            SDL_strlcpy(path_backup, s_rx_path[i], sizeof(path_backup));
+
+            s_rx_cfg[i] = s_rx_draft[i];
+            SDL_strlcpy(s_rx_path[i], s_rx_path_draft[i], AUDIO_PATH_MAX);
+            if (s_rx_cfg[i].rx_impl_type == RX_IMPL_TYPE_FILE) {
+                s_rx_cfg[i].config.file.file_path = s_rx_path[i];
+            }
+
+            if (reopen) {
+                if (rx_reopen(i) != 0) {
+                    WARN_LOG("RX[%u] reopen failed, restore", (unsigned)i);
+                    s_rx_cfg[i] = backup;
+                    SDL_strlcpy(s_rx_path[i], path_backup, AUDIO_PATH_MAX);
+                    if (s_rx_cfg[i].rx_impl_type == RX_IMPL_TYPE_FILE) {
+                        s_rx_cfg[i].config.file.file_path = s_rx_path[i];
+                    }
+                    s_rx_draft[i] = s_rx_cfg[i];
+                    SDL_strlcpy(s_rx_path_draft[i], s_rx_path[i], AUDIO_PATH_MAX);
+                    (void)rx_reopen(i);
+                }
+            }
+        }
+        for (i = 0; i < s_tx_cnt; i++) {
+            int reopen = tx_need_reopen(i);
+            bsp_audio_system_tx_map_t backup = s_tx_cfg[i];
+            char path_backup[AUDIO_PATH_MAX];
+            SDL_strlcpy(path_backup, s_tx_path[i], sizeof(path_backup));
+
+            s_tx_cfg[i] = s_tx_draft[i];
+            SDL_strlcpy(s_tx_path[i], s_tx_path_draft[i], AUDIO_PATH_MAX);
+            if (s_tx_cfg[i].tx_impl_type == TX_IMPL_TYPE_FILE) {
+                s_tx_cfg[i].config.file.file_path = s_tx_path[i];
+            }
+
+            if (reopen) {
+                if (tx_reopen(i) != 0) {
+                    WARN_LOG("TX[%u] reopen failed, restore", (unsigned)i);
+                    s_tx_cfg[i] = backup;
+                    SDL_strlcpy(s_tx_path[i], path_backup, AUDIO_PATH_MAX);
+                    if (s_tx_cfg[i].tx_impl_type == TX_IMPL_TYPE_FILE) {
+                        s_tx_cfg[i].config.file.file_path = s_tx_path[i];
+                    }
+                    s_tx_draft[i] = s_tx_cfg[i];
+                    SDL_strlcpy(s_tx_path_draft[i], s_tx_path[i], AUDIO_PATH_MAX);
+                    (void)tx_reopen(i);
+                }
+            }
+        }
+        bind_live_path_ptrs();
+        bind_draft_path_ptrs();
+        SDL_UnlockMutex(s_lock);
+        INFO_LOG("config applied");
+    }
+
+    s_ui_mode = AUDIO_UI_ENERGY;
+    arch_display_request_frame();
+}
+
+static float* sel_gain_ptr(void)
+{
+    int is_tx = (s_ui_sel < (int)s_tx_cnt);
+    int idx = is_tx ? s_ui_sel : (s_ui_sel - (int)s_tx_cnt);
+    if (is_tx && idx >= 0 && idx < (int)s_tx_cnt) {
+        if (s_tx_draft[idx].tx_impl_type == TX_IMPL_TYPE_FILE) {
+            return &s_tx_draft[idx].config.file.gain;
+        }
+        return &s_tx_draft[idx].config.system_output.gain;
+    }
+    if (!is_tx && idx >= 0 && idx < (int)s_rx_cnt) {
+        if (s_rx_draft[idx].rx_impl_type == RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK) {
+            return &s_rx_draft[idx].config.system_output_loopback.gain;
+        }
+        if (s_rx_draft[idx].rx_impl_type == RX_IMPL_TYPE_SYSTEM_MIC) {
+            return &s_rx_draft[idx].config.system_mic.gain;
+        }
+        if (s_rx_draft[idx].rx_impl_type == RX_IMPL_TYPE_FILE) {
+            return &s_rx_draft[idx].config.file.gain;
+        }
+    }
+    return NULL;
+}
+
+static void nudge_gain(float delta)
+{
+    float* g = sel_gain_ptr();
+    if (!g) {
+        return;
+    }
+    *g += delta;
+    if (*g < 0.05f) {
+        *g = 0.05f;
+    }
+    if (*g > 4.0f) {
+        *g = 4.0f;
+    }
+}
+
+static void ui_handle_click(float px, float py)
+{
+    float x, y, w, h;
+    float list_w = 72.0f;
+    float row_h = 18.0f;
+    float btn_h = 18.0f;
+    float btn_w = 44.0f;
+    float gap = 4.0f;
+    float right_x;
+    float cy;
+    float path_w;
+    int i;
+    int total = (int)s_tx_cnt + (int)s_rx_cnt;
+    int is_tx_sel;
+    int ch_idx;
+
+    audio_panel_rect(&x, &y, &w, &h);
+
+    if (s_ui_mode == AUDIO_UI_ENERGY) {
+        int total = audio_channel_total();
+        int i;
+        audio_panel_rect(&x, &y, &w, &h);
+        if (!point_in_rect(px, py, x, y, w, h)) {
+            return;
+        }
+        for (i = 0; i < total; i++) {
+            float mx, my, mw, mh;
+            audio_meter_rect(i, &mx, &my, &mw, &mh);
+            if (point_in_rect(px, py, mx, my, mw, mh)) {
+                s_ui_sel = i;
+                break;
+            }
+        }
+        ui_enter_config();
+        return;
+    }
+
+    /* CONFIG */
+    if (point_in_rect(px, py, x + w - 28.0f, y + 2.0f, 22.0f, 16.0f)) {
+        ui_close_config(0);
+        return;
+    }
+    if (point_in_rect(px, py, x + w - 120.0f, y + h - 22.0f, 52.0f, 18.0f)) {
+        ui_close_config(1);
+        return;
+    }
+    if (point_in_rect(px, py, x + w - 62.0f, y + h - 22.0f, 52.0f, 18.0f)) {
+        ui_close_config(0);
+        return;
+    }
+
+    cy = y + 22.0f;
+    for (i = 0; i < total; i++) {
+        if (point_in_rect(px, py, x + 4.0f, cy, list_w - 8.0f, row_h)) {
+            if (s_ui_sel != i) {
+                path_edit_stop();
+                s_ui_sel = i;
+            }
+            arch_display_request_frame();
+            return;
+        }
+        cy += row_h + 2.0f;
+    }
+
+    is_tx_sel = (s_ui_sel < (int)s_tx_cnt);
+    ch_idx = is_tx_sel ? s_ui_sel : (s_ui_sel - (int)s_tx_cnt);
+    right_x = x + list_w + 8.0f;
+    cy = y + 22.0f + 16.0f;
+    path_w = w - (right_x - x) - 8.0f;
+    if (path_w < 80.0f) {
+        path_w = 80.0f;
+    }
+
+    if (is_tx_sel && ch_idx >= 0 && ch_idx < (int)s_tx_cnt) {
+        bsp_audio_system_tx_map_t* d = &s_tx_draft[ch_idx];
+        float type_area_w = w - (right_x - x) - 8.0f;
+        int hit = hit_type_btn_wrap(px, py, right_x, &cy, type_area_w, btn_w, btn_h, gap, 3);
+        if (hit >= 0) {
+            static const tx_impl_type_e s_tx_types[3] = {
+                TX_IMPL_TYPE_NONE, TX_IMPL_TYPE_FILE, TX_IMPL_TYPE_SYSTEM_OUTPUT
+            };
+            path_edit_stop();
+            ensure_tx_type_defaults(d, s_tx_types[hit], s_tx_path_draft[ch_idx]);
+            arch_display_request_frame();
+            return;
+        }
+        if (d->tx_impl_type == TX_IMPL_TYPE_NONE) {
+            if (s_path_editing) {
+                path_edit_stop();
+            }
+            return;
+        }
+        if (d->tx_impl_type == TX_IMPL_TYPE_FILE) {
+            if (point_in_rect(px, py, right_x, cy, path_w, AUDIO_PATH_FIELD_H)) {
+                path_edit_start();
+                arch_display_request_frame();
+                return;
+            }
+            cy += AUDIO_PATH_FIELD_H + 4.0f;
+        } else if (s_path_editing) {
+            path_edit_stop();
+        }
+        if (point_in_rect(px, py, right_x + 100.0f, cy - 2.0f, 22.0f, btn_h)) {
+            nudge_gain(-0.1f);
+            arch_display_request_frame();
+            return;
+        }
+        if (point_in_rect(px, py, right_x + 126.0f, cy - 2.0f, 22.0f, btn_h)) {
+            nudge_gain(0.1f);
+            arch_display_request_frame();
+            return;
+        }
+    } else if (!is_tx_sel && ch_idx >= 0 && ch_idx < (int)s_rx_cnt) {
+        bsp_audio_system_rx_map_t* d = &s_rx_draft[ch_idx];
+        float type_area_w = w - (right_x - x) - 8.0f;
+        int hit = hit_type_btn_wrap(px, py, right_x, &cy, type_area_w, btn_w, btn_h, gap, 5);
+        if (hit >= 0) {
+            static const rx_impl_type_e s_rx_types[5] = {
+                RX_IMPL_TYPE_NONE,
+                RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK,
+                RX_IMPL_TYPE_SYSTEM_MIC,
+                RX_IMPL_TYPE_FILE,
+                RX_IMPL_TYPE_SINE_WAVE
+            };
+            path_edit_stop();
+            ensure_rx_type_defaults(d, s_rx_types[hit], s_rx_path_draft[ch_idx]);
+            arch_display_request_frame();
+            return;
+        }
+        if (d->rx_impl_type == RX_IMPL_TYPE_NONE) {
+            if (s_path_editing) {
+                path_edit_stop();
+            }
+            return;
+        }
+        if (d->rx_impl_type == RX_IMPL_TYPE_SINE_WAVE) {
+            if (s_path_editing) {
+                path_edit_stop();
+            }
+            cy += 16.0f;
+            if (point_in_rect(px, py, right_x, cy, 28.0f, btn_h)) {
+                d->config.sine_wave.frequency -= 50.0f;
+                if (d->config.sine_wave.frequency < 50.0f) {
+                    d->config.sine_wave.frequency = 50.0f;
+                }
+                arch_display_request_frame();
+                return;
+            }
+            if (point_in_rect(px, py, right_x + 32.0f, cy, 28.0f, btn_h)) {
+                d->config.sine_wave.frequency += 50.0f;
+                if (d->config.sine_wave.frequency > 8000.0f) {
+                    d->config.sine_wave.frequency = 8000.0f;
+                }
+                arch_display_request_frame();
+                return;
+            }
+            if (point_in_rect(px, py, right_x + 68.0f, cy, 28.0f, btn_h)) {
+                d->config.sine_wave.amplitude -= 0.05f;
+                if (d->config.sine_wave.amplitude < 0.05f) {
+                    d->config.sine_wave.amplitude = 0.05f;
+                }
+                arch_display_request_frame();
+                return;
+            }
+            if (point_in_rect(px, py, right_x + 100.0f, cy, 28.0f, btn_h)) {
+                d->config.sine_wave.amplitude += 0.05f;
+                if (d->config.sine_wave.amplitude > 1.0f) {
+                    d->config.sine_wave.amplitude = 1.0f;
+                }
+                arch_display_request_frame();
+                return;
+            }
+        } else {
+            if (d->rx_impl_type == RX_IMPL_TYPE_FILE) {
+                if (point_in_rect(px, py, right_x, cy, path_w, AUDIO_PATH_FIELD_H)) {
+                    path_edit_start();
+                    arch_display_request_frame();
+                    return;
+                }
+                cy += AUDIO_PATH_FIELD_H + 4.0f;
+            } else if (s_path_editing) {
+                path_edit_stop();
+            }
+            if (point_in_rect(px, py, right_x + 100.0f, cy - 2.0f, 22.0f, btn_h)) {
+                nudge_gain(-0.1f);
+                arch_display_request_frame();
+                return;
+            }
+            if (point_in_rect(px, py, right_x + 126.0f, cy - 2.0f, 22.0f, btn_h)) {
+                nudge_gain(0.1f);
+                arch_display_request_frame();
+                return;
+            }
+            if (d->rx_impl_type == RX_IMPL_TYPE_FILE &&
+                point_in_rect(px, py, right_x + 154.0f, cy - 2.0f, 40.0f, btn_h)) {
+                d->config.file.loop = d->config.file.loop ? 0u : 1u;
+                arch_display_request_frame();
+                return;
+            }
+        }
+    }
+}
+
+static void ui_poll_clicks(void)
+{
+    arch_input_state_t input;
+    float px;
+    float py;
+    uint8_t down;
+
+    arch_input_get(&input);
+    down = input.mouse_left ? 1u : 0u;
+    px = (float)input.mouse_x;
+    py = (float)input.mouse_y;
+
+    if (s_mouse_was_down && !down) {
+        /* 抬起沿：一次点击 */
+        if (s_ui_lock) {
+            SDL_LockMutex(s_ui_lock);
+        }
+        ui_handle_click(px, py);
+        if (s_ui_lock) {
+            SDL_UnlockMutex(s_ui_lock);
+        }
+    }
+    s_mouse_was_down = down;
+}
+
+/* -------------------------------------------------------------------------- */
 /* 帧处理                                                                     */
 /* -------------------------------------------------------------------------- */
 
-static void process_one_frame(void)
+/* 返回 0 已处理一帧；-1 播放队列满，应停表等设备消耗（勿丢帧抢时钟）。 */
+static int process_one_frame(void)
 {
     bsp_audio_frame_t tx_frames[BSP_AUDIO_TX_MAX];
     bsp_audio_frame_t rx_frames[BSP_AUDIO_RX_MAX];
     bsp_audio_system_frame_info_t info;
-    bsp_audio_handler_t handler = s_user_handler;
+    bsp_audio_handler_t handler;
     uint8_t i;
+    uint8_t play = s_tx_play_bank;
+    uint8_t work = (uint8_t)(play ^ 1u);
+    uint64_t now_ns;
 
+    if (!tx_sys_can_accept_frame()) {
+        return -1;
+    }
+
+    /* 1) 先推送已缓存的上一拍 TX（不依赖本拍 CB） */
+    for (i = 0; i < s_tx_cnt; i++) {
+        tx_push_frame(&s_tx[i], s_tx_bank[play][i]);
+    }
+
+    /* 2) 拉本拍 RX */
     for (i = 0; i < s_rx_cnt; i++) {
         (void)rx_pull_frame(&s_rx[i], s_rx_float[i]);
     }
 
-    memset(s_tx_float, 0, sizeof(s_tx_float));
+    energy_store_all(s_tx_bank[play], s_rx_float);
+
+    handler = s_user_handler;
+    memset(s_tx_bank[work], 0, sizeof(s_tx_bank[0]));
     for (i = 0; i < s_tx_cnt; i++) {
-        tx_frames[i].stream_buf = s_tx_float[i];
+        tx_frames[i].stream_buf = s_tx_bank[work][i];
         tx_frames[i].buf_size = AUDIO_FRAME_BYTES;
     }
     for (i = 0; i < s_rx_cnt; i++) {
@@ -804,17 +2029,23 @@ static void process_one_frame(void)
     info.rx_frame_cnt = s_rx_cnt;
     info.frame_sample_cnt = BSP_AUDIO_FRAME_SAMPLES;
 
+    /* 3) 锁外跑 CB，长时间占用不堵推帧 / reopen */
+    SDL_UnlockMutex(s_lock);
     if (handler) {
         handler(&info);
     }
+    SDL_LockMutex(s_lock);
 
-    for (i = 0; i < s_tx_cnt; i++) {
-        tx_push_frame(&s_tx[i], s_tx_float[i]);
-    }
-
-    energy_store_all();
-    arch_display_request_frame();
+    s_tx_play_bank = work;
     s_frames_done++;
+
+    /* 能量条 UI 限到 ~30Hz，避免每音频帧 PushEvent 打爆主线程 */
+    now_ns = SDL_GetTicksNS();
+    if (now_ns - s_last_energy_ui_ns >= AUDIO_ENERGY_UI_PERIOD_NS) {
+        s_last_energy_ui_ns = now_ns;
+        arch_display_request_frame();
+    }
+    return 0;
 }
 
 static void audio_polling_task(void* arg)
@@ -824,18 +2055,19 @@ static void audio_polling_task(void* arg)
         return;
     }
 
-    SDL_LockMutex(s_lock);
+    ui_poll_clicks();
 
-    /* 统一按墙钟推帧：loopback 不足时该 RX 补静音，TX/文件仍按采样率前进 */
+    SDL_LockMutex(s_lock);
     {
         uint64_t now = SDL_GetTicksNS();
         uint64_t expect = (now - s_start_ns) * (uint64_t)BSP_AUDIO_SAMPLE_RATE_HZ /
                           1000000000ull / (uint64_t)BSP_AUDIO_FRAME_SAMPLES;
         while (s_frames_done < expect) {
-            process_one_frame();
+            if (process_one_frame() != 0) {
+                break; /* 队列满：等下次 poll，保持 frames_done 与可播放数据一致 */
+            }
         }
     }
-
     SDL_UnlockMutex(s_lock);
 }
 
@@ -846,6 +2078,12 @@ static void audio_polling_task(void* arg)
 static void audio_shutdown_partial(void)
 {
     uint8_t i;
+
+    path_edit_stop();
+    if (s_text_watch_on) {
+        SDL_RemoveEventWatch(audio_text_event_watch, NULL);
+        s_text_watch_on = 0;
+    }
 
     if (s_polling_task) {
         e_polling_task_destroy(s_polling_task);
@@ -866,6 +2104,10 @@ static void audio_shutdown_partial(void)
         SDL_DestroyMutex(s_lock);
         s_lock = NULL;
     }
+    if (s_ui_lock) {
+        SDL_DestroyMutex(s_ui_lock);
+        s_ui_lock = NULL;
+    }
     if (s_audio_subsystem_inited) {
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         s_audio_subsystem_inited = 0;
@@ -876,117 +2118,98 @@ int bsp_audio_system_init(void)
 {
     e_polling_task_desc_t poll_desc;
     uint8_t i;
-    size_t rx_n;
-    size_t tx_n;
 
     if (s_initialized) {
         return -1;
     }
 
-    rx_n = sizeof(s_rx_map) / sizeof(s_rx_map[0]);
-    tx_n = sizeof(s_tx_map) / sizeof(s_tx_map[0]);
-    if (rx_n == 0u && tx_n == 0u) {
-        ERROR_LOG("RX/TX map tables are both empty");
-        return -1;
-    }
-    if (rx_n > BSP_AUDIO_RX_MAX || tx_n > BSP_AUDIO_TX_MAX) {
-        ERROR_LOG("map table too large (rx=%u/%u tx=%u/%u)",
-                  (unsigned)rx_n, (unsigned)BSP_AUDIO_RX_MAX,
-                  (unsigned)tx_n, (unsigned)BSP_AUDIO_TX_MAX);
+    if (BSP_AUDIO_RX_CHANNELS == 0u && BSP_AUDIO_TX_CHANNELS == 0u) {
+        ERROR_LOG("RX/TX channel counts are both zero");
         return -1;
     }
 
     s_lock = SDL_CreateMutex();
-    if (!s_lock) {
+    s_ui_lock = SDL_CreateMutex();
+    if (!s_lock || !s_ui_lock) {
         ERROR_LOG("create mutex failed: %s", SDL_GetError());
+        audio_shutdown_partial();
         return -1;
     }
 
     SDL_SetHint(SDL_HINT_AUDIO_INCLUDE_MONITORS, "1");
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
         ERROR_LOG("SDL_InitSubSystem(AUDIO) failed: %s", SDL_GetError());
-        SDL_DestroyMutex(s_lock);
-        s_lock = NULL;
+        audio_shutdown_partial();
         return -1;
     }
     s_audio_subsystem_inited = 1;
 
     memset(s_rx, 0, sizeof(s_rx));
     memset(s_tx, 0, sizeof(s_tx));
-    s_rx_cnt = (uint8_t)rx_n;
-    s_tx_cnt = (uint8_t)tx_n;
+    memset(s_rx_cfg, 0, sizeof(s_rx_cfg));
+    memset(s_tx_cfg, 0, sizeof(s_tx_cfg));
+    memset(s_rx_path, 0, sizeof(s_rx_path));
+    memset(s_tx_path, 0, sizeof(s_tx_path));
+    memset(s_rx_path_draft, 0, sizeof(s_rx_path_draft));
+    memset(s_tx_path_draft, 0, sizeof(s_tx_path_draft));
+    s_rx_cnt = (uint8_t)BSP_AUDIO_RX_CHANNELS;
+    s_tx_cnt = (uint8_t)BSP_AUDIO_TX_CHANNELS;
 
     for (i = 0; i < s_rx_cnt; i++) {
-        s_rx[i].map = &s_rx_map[i];
-        if (s_rx_map[i].rx_impl_type == RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK) {
-            if (rx_open_loopback(&s_rx[i]) != 0) {
-                audio_shutdown_partial();
-                return -1;
-            }
-        } else if (s_rx_map[i].rx_impl_type == RX_IMPL_TYPE_FILE) {
-            if (rx_open_file(&s_rx[i]) != 0) {
-                audio_shutdown_partial();
-                return -1;
-            }
-        } else if (s_rx_map[i].rx_impl_type == RX_IMPL_TYPE_SINE_WAVE) {
-            s_rx[i].sine_phase = 0.0f;
-            INFO_LOG("RX[%u] '%s' sine %.1f Hz amp=%.3f",
-                     (unsigned)i,
-                     s_rx_map[i].name ? s_rx_map[i].name : "?",
-                     (double)s_rx_map[i].config.sine_wave.frequency,
-                     (double)s_rx_map[i].config.sine_wave.amplitude);
-        } else {
-            ERROR_LOG("RX[%u] unknown impl_type=%u", (unsigned)i, s_rx_map[i].rx_impl_type);
+        snprintf(s_rx_name[i], sizeof(s_rx_name[i]), "RX%u", (unsigned)i);
+        s_rx_cfg[i].name = s_rx_name[i];
+        s_rx_cfg[i].rx_impl_type = RX_IMPL_TYPE_NONE;
+        SDL_strlcpy(s_rx_path[i], AUDIO_DEFAULT_RX_WAV_PATH, AUDIO_PATH_MAX);
+        SDL_strlcpy(s_rx_path_draft[i], s_rx_path[i], AUDIO_PATH_MAX);
+    }
+    for (i = 0; i < s_tx_cnt; i++) {
+        snprintf(s_tx_name[i], sizeof(s_tx_name[i]), "TX%u", (unsigned)i);
+        s_tx_cfg[i].name = s_tx_name[i];
+        s_tx_cfg[i].tx_impl_type = TX_IMPL_TYPE_NONE;
+        SDL_strlcpy(s_tx_path[i], AUDIO_DEFAULT_TX_WAV_PATH, AUDIO_PATH_MAX);
+        SDL_strlcpy(s_tx_path_draft[i], s_tx_path[i], AUDIO_PATH_MAX);
+    }
+    bind_live_path_ptrs();
+    memcpy(s_rx_draft, s_rx_cfg, sizeof(bsp_audio_system_rx_map_t) * s_rx_cnt);
+    memcpy(s_tx_draft, s_tx_cfg, sizeof(bsp_audio_system_tx_map_t) * s_tx_cnt);
+    bind_draft_path_ptrs();
+    s_ui_mode = AUDIO_UI_ENERGY;
+    s_ui_sel = 0;
+    s_mouse_was_down = 0;
+    s_path_editing = 0;
+
+    if (!SDL_AddEventWatch(audio_text_event_watch, NULL)) {
+        WARN_LOG("AddEventWatch failed: %s", SDL_GetError());
+    } else {
+        s_text_watch_on = 1;
+    }
+
+    for (i = 0; i < s_rx_cnt; i++) {
+        s_rx[i].map = &s_rx_cfg[i];
+        if (rx_open_by_cfg(&s_rx[i]) != 0) {
             audio_shutdown_partial();
             return -1;
-        }
-        if (s_rx_map[i].rx_impl_type != RX_IMPL_TYPE_SINE_WAVE) {
-            INFO_LOG("RX[%u] '%s' type=%u",
-                     (unsigned)i,
-                     s_rx_map[i].name ? s_rx_map[i].name : "?",
-                     s_rx_map[i].rx_impl_type);
         }
     }
 
     for (i = 0; i < s_tx_cnt; i++) {
-        s_tx[i].map = &s_tx_map[i];
-        if (s_tx_map[i].tx_impl_type == TX_IMPL_TYPE_FILE) {
-            const char* path = s_tx_map[i].config.file.file_path;
-            if (!path || !path[0]) {
-                ERROR_LOG("TX[%u] '%s': empty file_path",
-                          (unsigned)i, s_tx_map[i].name ? s_tx_map[i].name : "?");
-                audio_shutdown_partial();
-                return -1;
-            }
-            if (wav_open(&s_tx[i].wav, path,
-                         BSP_AUDIO_SAMPLE_RATE_HZ, (uint16_t)BSP_AUDIO_CHANNELS) != 0) {
-                audio_shutdown_partial();
-                return -1;
-            }
-            INFO_LOG("TX[%u] '%s' file -> '%s'",
-                     (unsigned)i,
-                     s_tx_map[i].name ? s_tx_map[i].name : "?",
-                     path);
-        } else if (s_tx_map[i].tx_impl_type == TX_IMPL_TYPE_SYSTEM_OUTPUT) {
-            if (tx_open_system_output(&s_tx[i]) != 0) {
-                audio_shutdown_partial();
-                return -1;
-            }
-            INFO_LOG("TX[%u] '%s' system output gain=%.3f",
-                     (unsigned)i,
-                     s_tx_map[i].name ? s_tx_map[i].name : "?",
-                     (double)s_tx_map[i].config.system_output.gain);
-        } else {
-            ERROR_LOG("TX[%u] unknown impl_type=%u", (unsigned)i, s_tx_map[i].tx_impl_type);
+        s_tx[i].map = &s_tx_cfg[i];
+        if (tx_open_by_cfg(&s_tx[i]) != 0) {
             audio_shutdown_partial();
             return -1;
         }
     }
 
-    memset(s_tx_float, 0, sizeof(s_tx_float));
+    memset(s_tx_bank, 0, sizeof(s_tx_bank));
     memset(s_rx_float, 0, sizeof(s_rx_float));
+    s_tx_play_bank = 0;
+    s_last_energy_ui_ns = 0;
     memset(s_peak_tx, 0, sizeof(s_peak_tx));
     memset(s_peak_rx, 0, sizeof(s_peak_rx));
+    memset(s_spec_tx, 0, sizeof(s_spec_tx));
+    memset(s_spec_rx, 0, sizeof(s_spec_rx));
+    memset(s_pkhz_tx, 0, sizeof(s_pkhz_tx));
+    memset(s_pkhz_rx, 0, sizeof(s_pkhz_rx));
     for (i = 0; i < BSP_AUDIO_TX_MAX; i++) {
         SDL_SetAtomicInt(&s_energy_tx_q15[i], 0);
     }
@@ -1016,7 +2239,7 @@ int bsp_audio_system_init(void)
     }
 
     s_initialized = 1u;
-    INFO_LOG("ready: %u Hz frame=%u tx=%u rx=%u",
+    INFO_LOG("ready: %u Hz frame=%u tx=%u rx=%u (runtime type cfg via energy panel)",
              (unsigned)BSP_AUDIO_SAMPLE_RATE_HZ,
              (unsigned)BSP_AUDIO_FRAME_SAMPLES,
              (unsigned)s_tx_cnt,
@@ -1030,6 +2253,12 @@ void bsp_audio_system_deinit(void)
         return;
     }
     s_initialized = 0u;
+
+    path_edit_stop();
+    if (s_text_watch_on) {
+        SDL_RemoveEventWatch(audio_text_event_watch, NULL);
+        s_text_watch_on = 0;
+    }
 
     if (s_polling_task) {
         e_polling_task_destroy(s_polling_task);
@@ -1058,8 +2287,13 @@ void bsp_audio_system_deinit(void)
         SDL_DestroyMutex(s_lock);
         s_lock = NULL;
     }
+    if (s_ui_lock) {
+        SDL_DestroyMutex(s_ui_lock);
+        s_ui_lock = NULL;
+    }
 
     s_user_handler = NULL;
+    s_ui_mode = AUDIO_UI_ENERGY;
     if (s_audio_subsystem_inited) {
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         s_audio_subsystem_inited = 0;

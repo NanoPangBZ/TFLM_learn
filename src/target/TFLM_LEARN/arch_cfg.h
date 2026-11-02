@@ -6,9 +6,9 @@
  * 窗口允许拖动缩放；各区域按像素 1:1 布局，窗口小于区域时超出部分被裁剪。 */
 
 #define ARCH_WINDOW_TITLE           "TFLM_LEARN (SDL3 board)"
-#define ARCH_WINDOW_WIDTH           800
-/* 原 490 + 底部音频能量条 */
-#define ARCH_WINDOW_HEIGHT          530
+/* 主显示区(~788) + 间距 + 右侧音频面板 280 */
+#define ARCH_WINDOW_WIDTH           1096
+#define ARCH_WINDOW_HEIGHT          520
 
 /* 1: 窗口可拖动缩放；0: 固定大小 */
 #define ARCH_WINDOW_RESIZABLE       1

@@ -9,15 +9,15 @@
 /**
  * @brief bsp_display
  *
- * 平台开发目标：主屏 + 右侧 encoder + 底部 keyboard/knob。
+ * 平台开发目标三列布局：
  *
- *   [0,0]                 [336,0]
- *   +------------------+  +--------+
- *   | display0 / touch |  |  VOL   |
- *   |     320 x 240    |  +--------+
- *   |                  |  |  BPM   |
- *   +------------------+  +--------+
- *   [keyboard 320x168]    [RV100/101]
+ *   [0,0]           [328,0]      [464,0]
+ *   +------------+  +--------+   +--------------+
+ *   | display0   |  |  VOL   |   | AUDIO meters |
+ *   | 320 x 240  |  +--------+   | PANEL_W x N  |
+ *   |            |  |  BPM   |   |              |
+ *   +------------+  +--------+   +--------------+
+ *   [keyboard]      [RV100/101]
  *
  * @note bsp_display_map_t 定义在 bsp_display_sdl.c 内部。
  *       rotation：呈现顺时针角度（度），常用 0/90/180/270。
@@ -51,41 +51,27 @@
 /* 编码器映射表：name -> 主窗口内的旋钮区域
  *   名字显示在旋钮上方；鼠标位于区域内时滚轮模拟旋转，左键模拟按下。 */
 #define BSP_ENCODER_MAP_TABLE {\
-        { .name = "VOL", .x = 336, .y = 8,   .width = 120, .height = 110, .dir = 1 },\
-        { .name = "BPM", .x = 336, .y = 126, .width = 120, .height = 110, .dir = 1 },\
+        { .name = "VOL", .x = 328, .y = 8,   .width = 120, .height = 110, .dir = 1 },\
+        { .name = "BPM", .x = 328, .y = 126, .width = 120, .height = 110, .dir = 1 },\
     }
 
 /***********************************************************************************************************************/
 /**
  * @brief bsp_audio_system 配置
- * @note 映射表项 / RX_IMPL_TYPE_* / TX_IMPL_TYPE_* 定义在 bsp_audio_system_sdl.c。
+ * @note 采样率 / 帧长 / 通道数编译期固定。
+ *       PANEL_W：频率表与配置页共用宽度；METER_H/GAP 控制每通道表高与间距。
  */
 #define BSP_AUDIO_SAMPLE_RATE_HZ    44100u
 #define BSP_AUDIO_FRAME_SAMPLES     128u
+#define BSP_AUDIO_RX_CHANNELS       2u
+#define BSP_AUDIO_TX_CHANNELS       1u
 #define BSP_AUDIO_POLL_FREQ_HZ      500u
 
-#define BSP_AUDIO_SYSTEM_RX_MAPTABLE {\
-        {\
-          .rx_impl_type = RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK, .name = "SYS",\
-          .config.system_output_loopback = { .gain = 1.0f }\
-        },\
-        {\
-          .rx_impl_type = RX_IMPL_TYPE_SINE_WAVE, .name = "SINE",\
-          .config.sine_wave = { .frequency = 1000.0f, .amplitude = 0.2f }\
-        },\
-    }
-
-#define BSP_AUDIO_SYSTEM_TX_MAPTABLE {\
-        {\
-          .tx_impl_type = TX_IMPL_TYPE_FILE, .name = "OUT",\
-          .config.file = { .file_path = "audio_tx.wav", .gain = 1.0f }\
-        },\
-    }
-
-#define BSP_AUDIO_ENERGY_X          8
-#define BSP_AUDIO_ENERGY_Y          252
-#define BSP_AUDIO_ENERGY_W          448
-#define BSP_AUDIO_ENERGY_H          80
+#define BSP_AUDIO_UI_X              464
+#define BSP_AUDIO_UI_Y              8
+#define BSP_AUDIO_PANEL_W           288
+#define BSP_AUDIO_METER_H           148
+#define BSP_AUDIO_METER_GAP         8
 
 /***********************************************************************************************************************/
 /**
@@ -99,7 +85,7 @@
 #define BSP_KEYBOARD_MAP_TABLE {\
         {\
           .type = BSP_KEYBOARD_TYPE_VIRTUAL_TEST, .idx = 0, .name = "PAD",\
-          .x = 8, .y = 340, .width = 320, .height = 168,\
+          .x = 8, .y = 340, .width = 312, .height = 168,\
           .key_count = 16, .cols = 0\
         },\
     }
@@ -113,9 +99,9 @@
 #define BSP_KNOB_POLL_FREQ_HZ   50
 
 #define BSP_KNOB_MAP_TABLE {\
-        { .name = "RV100", .x = 336, .y = 340, .width = 120, .height = 84,\
+        { .name = "RV100", .x = 328, .y = 340, .width = 120, .height = 84,\
           .initial = 0.5f, .dir = 1 },\
-        { .name = "RV101", .x = 336, .y = 424, .width = 120, .height = 84,\
+        { .name = "RV101", .x = 328, .y = 424, .width = 120, .height = 84,\
           .initial = 0.0f, .dir = 1 },\
     }
 
