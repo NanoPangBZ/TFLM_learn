@@ -33,17 +33,6 @@ typedef struct bsp_touch_desc_t{
     bsp_touch_attr_t    attr;
 }bsp_touch_desc_t;
 
-// 触摸屏映射表项 - 由 bsp_cfg.h 的 BSP_TOUCH_MAP_TABLE 提供
-// SDL 后端把 (type, idx) 映射到 arch 主窗口内的一块触摸矩形
-typedef struct bsp_touch_map_t{
-    bsp_touch_type_t type;
-    uint8_t          idx;
-    int16_t          x;       // 触摸区左上角 X（窗口客户区像素）
-    int16_t          y;       // 触摸区左上角 Y
-    uint16_t         width;   // 触摸区宽度（像素）
-    uint16_t         height;  // 触摸区高度（像素）
-}bsp_touch_map_t;
-
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -42,15 +42,15 @@
 #define BSP_ENCODER_FONT_SIZE       14.0f
 #define BSP_ENCODER_DEG_PER_STEP    20.0f
 
-/* 编码器映射表项：只属于本实现，不污染 bsp_encoder.h 标准接口 */
+/* 编码器映射表项：只属于本实现，不污染 bsp_encoder.h 标准接口。
+ * 与 YouWei 一致按 name 打开；SDL 额外用矩形区域做鼠标命中与绘制。 */
 typedef struct bsp_encoder_map_t {
-    bsp_encoder_type_t type;
-    uint8_t            idx;
-    const char*        name;
-    int16_t            x;
-    int16_t            y;
-    uint16_t           width;
-    uint16_t           height;
+    const char* name;
+    int16_t     x;
+    int16_t     y;
+    uint16_t    width;
+    uint16_t    height;
+    int8_t      dir;    /* 1:正向，-1:反向，0:默认正向 */
 } bsp_encoder_map_t;
 
 typedef struct trig_reg_info_t {
@@ -59,7 +59,6 @@ typedef struct trig_reg_info_t {
 } trig_reg_info_t;
 
 typedef struct bsp_encoder_t {
-    bsp_encoder_desc_t desc;
     const bsp_encoder_map_t* map;
     uint8_t open_cnt;
 
@@ -84,10 +83,13 @@ static SDL_Mutex* s_encoder_lock = NULL;
 static TTF_Font* s_font = NULL;
 static uint8_t s_ttf_ready = 0;
 
-static const bsp_encoder_map_t* encoder_map_find(bsp_encoder_type_t type, uint8_t idx)
+static const bsp_encoder_map_t* encoder_map_find(const char* name)
 {
+    if (!name) {
+        return NULL;
+    }
     for (size_t i = 0; i < sizeof(s_encoder_map) / sizeof(s_encoder_map[0]); i++) {
-        if (s_encoder_map[i].type == type && s_encoder_map[i].idx == idx) {
+        if (s_encoder_map[i].name && strcmp(s_encoder_map[i].name, name) == 0) {
             return &s_encoder_map[i];
         }
     }
@@ -277,7 +279,7 @@ static void encoder_polling_task(void* arg)
 
         int32_t inc = 0;
         if (inside && wheel != 0) {
-            int dir = (e->desc.dir == -1) ? -1 : 1;
+            int dir = (m->dir == -1) ? -1 : 1;
             inc = wheel * dir;
             wheel = 0;
 
@@ -308,9 +310,11 @@ static void encoder_polling_task(void* arg)
 /* 对外接口                                                                   */
 /* -------------------------------------------------------------------------- */
 
-bsp_encoder_handle_t bsp_encoder_open(bsp_encoder_desc_t* desc)
+bsp_encoder_handle_t bsp_encoder_open(const char* name)
 {
-    if (!desc) {
+    const bsp_encoder_map_t* map = encoder_map_find(name);
+    if (!map) {
+        ERROR_LOG("bsp_encoder_open: no map found for name %s!", name ? name : "(null)");
         return NULL;
     }
 
@@ -318,7 +322,7 @@ bsp_encoder_handle_t bsp_encoder_open(bsp_encoder_desc_t* desc)
 
     for (uint32_t i = 0; i < s_encoder_count; i++) {
         bsp_encoder_t* e = s_encoders[i];
-        if (e->desc.type == desc->type && e->desc.idx == desc->idx) {
+        if (e->map == map) {
             e->open_cnt++;
             SDL_UnlockMutex(s_encoder_lock);
             return (bsp_encoder_handle_t)e;
@@ -333,12 +337,6 @@ bsp_encoder_handle_t bsp_encoder_open(bsp_encoder_desc_t* desc)
 
     SDL_UnlockMutex(s_encoder_lock);
 
-    const bsp_encoder_map_t* map = encoder_map_find(desc->type, desc->idx);
-    if (!map) {
-        WARN_LOG("unsupported encoder type=%u idx=%u", (unsigned)desc->type, (unsigned)desc->idx);
-        return NULL;
-    }
-
     SDL_Renderer* renderer = arch_display_renderer();
     if (!renderer) {
         return NULL;
@@ -349,7 +347,6 @@ bsp_encoder_handle_t bsp_encoder_open(bsp_encoder_desc_t* desc)
         return NULL;
     }
 
-    e->desc = *desc;
     e->map = map;
     e->open_cnt = 1;
     e->position = 0;
@@ -374,9 +371,8 @@ bsp_encoder_handle_t bsp_encoder_open(bsp_encoder_desc_t* desc)
     s_encoders[s_encoder_count++] = e;
     SDL_UnlockMutex(s_encoder_lock);
 
-    INFO_LOG("encoder '%s' open: type=%u idx=%u at (%d,%d) %ux%u",
+    INFO_LOG("encoder '%s' open at (%d,%d) %ux%u",
              map->name ? map->name : "?",
-             (unsigned)desc->type, (unsigned)desc->idx,
              (int)map->x, (int)map->y, (unsigned)map->width, (unsigned)map->height);
 
     return (bsp_encoder_handle_t)e;
@@ -476,13 +472,7 @@ static int bsp_encoder_init(void)
 
     /* 主动打开映射表里的编码器：BSP 初始化完就显示到 arch 窗口 */
     for (size_t i = 0; i < sizeof(s_encoder_map) / sizeof(s_encoder_map[0]); i++) {
-        bsp_encoder_desc_t desc = {
-            .type = s_encoder_map[i].type,
-            .idx = s_encoder_map[i].idx,
-            .attr = BSP_ENCODER_ATTR_DEFAULT,
-            .dir = 0,
-        };
-        if (!bsp_encoder_open(&desc)) {
+        if (!bsp_encoder_open(s_encoder_map[i].name)) {
             WARN_LOG("auto open encoder '%s' failed",
                      s_encoder_map[i].name ? s_encoder_map[i].name : "?");
         }

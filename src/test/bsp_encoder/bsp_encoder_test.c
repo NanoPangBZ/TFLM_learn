@@ -2,19 +2,14 @@
 #include "bsp/bsp_encoder.h"
 #include <string.h>
 
+#define BSP_ENCODER_TEST_NAME "VOL"
+
 #include "framework/e_log.h"
 #define TAG "bsp_encoder_test"
 #define DEBUG_LOG(...)   E_DEBUG_LOG(TAG, __VA_ARGS__)
 #define INFO_LOG(...)    E_INFO_LOG(TAG, __VA_ARGS__)
 #define WARN_LOG(...)    E_WARN_LOG(TAG, __VA_ARGS__)
 #define ERROR_LOG(...)   E_ERROR_LOG(TAG, __VA_ARGS__)
-
-const static bsp_encoder_desc_t test_encoder_desc = {
-    .type = BSP_ENCODER_TYPE_SYSTEM_CONTROL,
-    .idx  = 0,
-    .attr = BSP_ENCODER_ATTR_DEFAULT,
-    .dir = 1,
-};
 
 static void bsp_encoder_trigger_cb(bsp_encoder_handle_t handle, void* ctx, bsp_encoder_trigger_t* trigger)
 {
@@ -28,7 +23,7 @@ static void bsp_encoder_trigger_cb(bsp_encoder_handle_t handle, void* ctx, bsp_e
 
 static int test_init(void)
 {
-    bsp_encoder_handle_t encoder_handle = bsp_encoder_open((bsp_encoder_desc_t*)&test_encoder_desc);
+    bsp_encoder_handle_t encoder_handle = bsp_encoder_open(BSP_ENCODER_TEST_NAME);
     if( !encoder_handle )
     {
         ERROR_LOG("Failed to open encoder");

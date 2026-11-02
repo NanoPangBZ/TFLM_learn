@@ -7,6 +7,7 @@
 /***********************************************************************************************************************/
 /**
  * @brief bsp_display
+ * @note bsp_display_map_t 定义在 bsp_display_sdl.c 内部。
  */
 
 #define BSP_DISPLAY_MAP_TABLE {\
@@ -19,6 +20,7 @@
 /***********************************************************************************************************************/
 /**
  * @brief bsp_touch
+ * @note bsp_touch_map_t 定义在 bsp_touch_sdl.c 内部。
  */
 #define BSP_TOUCH_MAP_TABLE {\
         { .type = BSP_TOUCH_TYPE_USER, .idx = 0, .x = 0, .y = 0, .width = 320, .height = 240 },\
@@ -55,6 +57,7 @@
 /***********************************************************************************************************************/
 /**
  * @brief bsp_storage 配置（SDL 文件后端）
+ * @note bsp_storage_map_t 定义在 bsp_storage_sdl.c 内部。
  */
 
 #define BSP_STORAGE_BASE_DIR    "flash_data"

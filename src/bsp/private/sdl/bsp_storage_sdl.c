@@ -31,6 +31,19 @@
 #define BSP_STORAGE_MAX_OPEN   8
 #define BSP_STORAGE_FILL_CHUNK 4096
 
+/* 存储器映射表项：只属于本实现，不污染 bsp_storage.h 标准接口 */
+typedef struct bsp_storage_map_t {
+    bsp_storage_type_t type;
+    uint8_t index;
+    bsp_storage_medium_t medium;
+    const char* filename;
+    uint32_t total_size;
+    uint32_t erase_unit;
+    uint32_t program_unit;
+    uint32_t erase_value;
+    uint8_t write_direct;
+} bsp_storage_map_t;
+
 /* 存储器映射表：由 bsp_cfg.h 提供，type + index 唯一确定一个 bin 文件 */
 static const bsp_storage_map_t s_storage_map[] = BSP_STORAGE_MAP_TABLE;
 

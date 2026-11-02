@@ -22,6 +22,16 @@
 
 #define MALLOC(size)  e_heap_malloc((size), E_HEAP_ATTR_DEFAULT)
 
+/* 触摸区域映射表项：只属于本实现，不污染 bsp_touch.h 标准接口 */
+typedef struct bsp_touch_map_t {
+    bsp_touch_type_t type;
+    uint8_t          idx;
+    int16_t          x;
+    int16_t          y;
+    uint16_t         width;
+    uint16_t         height;
+} bsp_touch_map_t;
+
 /* 触摸区域映射表：由 bsp_cfg.h 提供，type + idx 唯一确定一块区域 */
 static const bsp_touch_map_t s_touch_map[] = BSP_TOUCH_MAP_TABLE;
 

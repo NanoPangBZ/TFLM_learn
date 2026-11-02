@@ -1,7 +1,6 @@
 #pragma once
 
 #include "bsp/bsp_display.h"
-#include "bsp/bsp_encoder.h"
 #include "bsp/bsp_keyboard.h"
 #include "bsp/bsp_storage.h"
 #include "bsp/bsp_touch.h"
@@ -18,6 +17,8 @@
  *   |     320 x 240    |  +--------+
  *   |                  |  |  BPM   |
  *   +------------------+  +--------+
+ *
+ * @note bsp_display_map_t 定义在 bsp_display_sdl.c 内部。
  */
 
 #define BSP_DISPLAY_MAP_TABLE {\
@@ -27,6 +28,7 @@
 /***********************************************************************************************************************/
 /**
  * @brief bsp_touch
+ * @note bsp_touch_map_t 定义在 bsp_touch_sdl.c 内部。
  */
 #define BSP_TOUCH_MAP_TABLE {\
         { .type = BSP_TOUCH_TYPE_USER, .idx = 0, .x = 0, .y = 0, .width = 320, .height = 240 },\
@@ -35,19 +37,17 @@
 /***********************************************************************************************************************/
 /**
  * @brief bsp_encoder 配置（SDL 鼠标滚轮模拟）
- * @note bsp_encoder_map_t 定义在 bsp_encoder_sdl.c 内部，这里只放映射表宏。
+ * @note 与 YouWei 一致按 name 打开；bsp_encoder_map_t 在 bsp_encoder_sdl.c 内定义。
  */
 
 /* 所有编码器共用一个轮询任务，统一频率 */
 #define BSP_ENCODER_POLL_FREQ_HZ    50
 
-/* 编码器映射表：type + idx -> 主窗口内的旋钮区域
+/* 编码器映射表：name -> 主窗口内的旋钮区域
  *   名字显示在旋钮上方；鼠标位于区域内时滚轮模拟旋转，左键模拟按下。 */
 #define BSP_ENCODER_MAP_TABLE {\
-        { .type = BSP_ENCODER_TYPE_SYSTEM_CONTROL, .idx = 0, .name = "VOL",\
-          .x = 336, .y = 8,   .width = 120, .height = 110 },\
-        { .type = BSP_ENCODER_TYPE_BPM_CONTROL,    .idx = 0, .name = "BPM",\
-          .x = 336, .y = 126, .width = 120, .height = 110 },\
+        { .name = "VOL", .x = 336, .y = 8,   .width = 120, .height = 110, .dir = 1 },\
+        { .name = "BPM", .x = 336, .y = 126, .width = 120, .height = 110, .dir = 1 },\
     }
 
 /***********************************************************************************************************************/
@@ -101,6 +101,7 @@
 /***********************************************************************************************************************/
 /**
  * @brief bsp_storage 配置（SDL 文件后端）
+ * @note bsp_storage_map_t 定义在 bsp_storage_sdl.c 内部。
  */
 
 #define BSP_STORAGE_BASE_DIR    "flash_data"

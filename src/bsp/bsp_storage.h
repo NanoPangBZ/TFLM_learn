@@ -52,24 +52,6 @@ typedef struct bsp_storage_desc_t{
     bsp_storage_attr_t attr;    //属性
 }bsp_storage_desc_t;
 
-/* 存储器映射表项 - 由 bsp_cfg.h 的 BSP_STORAGE_MAP_TABLE 提供
- * SDL 后端把每个表项映射成一个固定大小的 bin 文件，模拟真实 flash：
- *   erase_unit   擦除粒度（如 4KB sector）
- *   program_unit 编程粒度（如 256B page）
- *   erase_value  擦除后的填充值（NOR flash 为 0xFF）
- *   write_direct 1: 可直接覆盖写；0: 必须先擦除（写入按 old & data 生效） */
-typedef struct bsp_storage_map_t{
-    bsp_storage_type_t type;
-    uint8_t index;
-    bsp_storage_medium_t medium;
-    const char* filename;       // 文件名（不含 .bin），实际文件为 <base>/<filename>.bin
-    uint32_t total_size;        // 总容量（字节），必须与 bin 文件大小一致
-    uint32_t erase_unit;        // 擦除单元（字节），0=不支持擦除，1=任意擦除
-    uint32_t program_unit;      // 编程单元（字节），0=不支持编程，1=任意编程
-    uint32_t erase_value;       // 擦除值，flash 为 0xFF
-    uint8_t write_direct;       // 1=可直接写，0=需要先擦除
-}bsp_storage_map_t;
-
 
 #ifdef __cplusplus
 extern "C" {
@@ -106,8 +88,6 @@ const bsp_storage_info_t* bsp_storage_get_info(bsp_storage_handle_t handle);
  * @param data 数据缓冲区
  * @param length 写入长度
  * @return 成功写入的长度
- * @note 允许任意地址/长度（不要求对齐）。对 write_direct=0 的 flash，
- *       未擦除区域按 old & data 写入（只能 1->0），跨 program_unit 页会自动处理。
 */
 uint32_t bsp_storage_write(bsp_storage_handle_t handle, uint32_t address , const uint8_t* data , uint32_t length);
 
@@ -117,7 +97,6 @@ uint32_t bsp_storage_write(bsp_storage_handle_t handle, uint32_t address , const
  * @param address 擦除地址(存储器内部地址)
  * @param length 擦除长度
  * @return 成功擦除的长度
- * @note 要求 address 与 length 都按 erase_unit 对齐；不对齐返回 0。
 */
 uint32_t bsp_storage_erase(bsp_storage_handle_t handle, uint32_t address , uint32_t length);
 
@@ -128,9 +107,9 @@ uint32_t bsp_storage_erase(bsp_storage_handle_t handle, uint32_t address , uint3
  * @param data 数据缓冲区
  * @param length 读取长度
  * @return 成功读取的长度
- * @note 读取不要求对齐。
 */
 uint32_t bsp_storage_read(bsp_storage_handle_t handle, uint32_t address , uint8_t* data , uint32_t length);
+
 /**
  * @brief 刷新数据
  * @param handle 存储器句柄

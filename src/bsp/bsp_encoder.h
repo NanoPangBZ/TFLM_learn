@@ -27,28 +27,6 @@ typedef enum bsp_encoder_status_e{
 }bsp_encoder_status_e;
 typedef uint8_t bsp_encoder_status_t;
 
-// encoder类型枚举 - 用于打开encoder设备
-typedef enum bsp_encoder_type_e{
-    BSP_ENCODER_TYPE_UNKNOWN = 0,
-    BSP_ENCODER_TYPE_SYSTEM_CONTROL = 1,          //系统控制编码器
-    BSP_ENCODER_TYPE_BPM_CONTROL = 2,             //BPM控制编码器
-}bsp_encoder_type_e;
-typedef uint8_t bsp_encoder_type_t;
-
-// encoder属性枚举 - 用于打开encoder设备
-typedef enum bsp_encoder_attr_e{
-    BSP_ENCODER_ATTR_DEFAULT = 0x00,                    // 默认属性
-}bsp_encoder_attr_e;
-typedef uint32_t bsp_encoder_attr_t;
-
-// encoder描述结构体 - 用于打开encoder设备
-typedef struct bsp_encoder_desc_t{
-    bsp_encoder_type_t type;
-    uint8_t             idx;
-    bsp_encoder_attr_t attr;
-    int8_t             dir; //1:正向，-1:反向，0:默认
-}bsp_encoder_desc_t;
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -57,10 +35,10 @@ extern "C" {
 
 /**
  * @brief 打开encoder设备
- * @param desc encoder描述结构体指针
+ * @param name encoder在 BSP 映射表中的名称
  * @return encoder设备句柄
 */
-bsp_encoder_handle_t bsp_encoder_open(bsp_encoder_desc_t* desc);
+bsp_encoder_handle_t bsp_encoder_open(const char* name);
 
 /**
  * @brief 关闭encoder设备

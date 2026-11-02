@@ -26,6 +26,16 @@
 
 #define MALLOC(size)  e_heap_malloc((size), E_HEAP_ATTR_DEFAULT)
 
+/* 显示器映射表项：只属于本实现，不污染 bsp_display.h 标准接口 */
+typedef struct bsp_display_map_t {
+    bsp_display_type_t type;
+    uint8_t            idx;
+    int16_t            x;
+    int16_t            y;
+    uint16_t           width;
+    uint16_t           height;
+} bsp_display_map_t;
+
 /* 显示器映射表：由 bsp_cfg.h 提供，type + idx 唯一确定一块区域 */
 static const bsp_display_map_t s_display_map[] = BSP_DISPLAY_MAP_TABLE;
 
