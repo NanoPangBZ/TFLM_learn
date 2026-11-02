@@ -24,7 +24,7 @@
 
 #define BSP_DISPLAY_MAP_TABLE {\
         { .type = BSP_DISPLAY_TYPE_USER, .idx = 0,\
-          .x = 0, .y = 0, .width = 320, .height = 240, .rotation = 90 },\
+          .x = 0, .y = 0, .width = 240, .height = 320, .rotation = 90 },\
     }
 
 /***********************************************************************************************************************/
@@ -35,7 +35,7 @@
  */
 #define BSP_TOUCH_MAP_TABLE {\
         { .type = BSP_TOUCH_TYPE_USER, .idx = 0,\
-          .x = 0, .y = 0, .width = 320, .height = 240, .rotation = 0 },\
+          .x = 0, .y = 0, .width = 240, .height = 320, .rotation = 90 },\
     }
 
 /***********************************************************************************************************************/
@@ -89,8 +89,9 @@
 /***********************************************************************************************************************/
 /**
  * @brief bsp_keyboard 配置（SDL 鼠标点击模拟）
- * @note 映射表项结构体在 bsp_keyboard_sdl.c；键位固定 8 列 × 4 行，
- *       key_count 决定实际显示/有效键数（≤32）。
+ * @note 映射表项在 bsp_keyboard_sdl.c。
+ *       width/height：面板外框像素尺寸；键格铺满可用区。
+ *       key_count：有效键数（1..32）；cols=0 按长宽比自适应列数，>0 强制列数。
  */
 #define BSP_KEYBOARD_POLL_FREQ_HZ   50
 
@@ -98,7 +99,7 @@
         {\
           .type = BSP_KEYBOARD_TYPE_VIRTUAL_TEST, .idx = 0, .name = "PAD",\
           .x = 8, .y = 340, .width = 448, .height = 168,\
-          .key_count = 16\
+          .key_count = 16, .cols = 0\
         },\
     }
 

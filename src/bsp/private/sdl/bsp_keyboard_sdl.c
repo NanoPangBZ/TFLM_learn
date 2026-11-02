@@ -1,12 +1,14 @@
 /* bsp_keyboard_sdl.c — bsp_keyboard 的 SDL3 后端（鼠标点击模拟按键）。
  *
  * 设计：
- *   - 映射表放在 bsp_cfg.h 的 BSP_KEYBOARD_MAP_TABLE（名字/位置/尺寸/键数）；
+ *   - 映射表在 bsp_cfg.h 的 BSP_KEYBOARD_MAP_TABLE；
  *   - bsp_keyboard_map_t 只在本文件内定义，不污染 bsp_keyboard.h；
- *   - 每个键盘是 arch 主窗口内一块面板，按固定 8 列 × 4 行排布键位；
- *     实际显示键数由 map.key_count 决定（≤32，对应 uint32_t key_mask）；
+ *   - 面板外框由 map.x/y/width/height 指定；键格铺满可用区；
+ *   - cols=0 时按面板长宽比自动选列数，使单元格接近正方形；
+ *     cols>0 时强制列数，行数 = ceil(key_count / cols)；
+ *   - key_count 为有效键数（1..32，对应 uint32_t key_mask），只画有效键；
  *   - REGEDIT_BSP_INIT_FUNCTION 主动打开映射表里的键盘；
- *   - 轮询读取 arch_input：鼠标左键按住且落在某键上则该位置 1。
+ *   - 轮询读取 arch_input：鼠标左键按住且落在某键上则该位为 1。
  */
 #include "bsp/bsp_keyboard.h"
 #include "bsp_cfg.h"
@@ -20,6 +22,7 @@
 #include "framework/e_sched.h"
 
 #include <SDL3/SDL.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,9 +33,7 @@
 #define ERROR_LOG(...)  E_ERROR_LOG(TAG, __VA_ARGS__)
 
 #define BSP_KEYBOARD_MAX                2
-#define BSP_KEYBOARD_COLS               8
-#define BSP_KEYBOARD_ROWS               4
-#define BSP_KEYBOARD_SLOTS              (BSP_KEYBOARD_COLS * BSP_KEYBOARD_ROWS)
+#define BSP_KEYBOARD_KEY_MAX            32
 #ifndef BSP_KEYBOARD_POLL_FREQ_HZ
 #define BSP_KEYBOARD_POLL_FREQ_HZ       50
 #endif
@@ -46,9 +47,10 @@ typedef struct bsp_keyboard_map_t {
     const char*         name;
     int16_t             x;
     int16_t             y;
-    uint16_t            width;
-    uint16_t            height;
-    uint8_t             key_count; /* 显示/有效键数，1..32；按 8x4 左上起填 */
+    uint16_t            width;     /* 面板宽（像素），由 bsp_cfg 指定 */
+    uint16_t            height;    /* 面板高（像素），由 bsp_cfg 指定 */
+    uint8_t             key_count; /* 有效键数 1..32；0 视为 1 */
+    uint8_t             cols;      /* 列数；0=按面板长宽比自适应 */
 } bsp_keyboard_map_t;
 
 typedef struct trig_reg_info_t {
@@ -63,6 +65,9 @@ typedef struct bsp_keyboard_t {
 
     uint32_t key_mask;
     uint8_t  key_count;
+    uint8_t  cols;
+    uint8_t  rows;
+    uint8_t  title_h;
 
     list_handle_t trigger_list;
 } bsp_keyboard_t;
@@ -93,55 +98,125 @@ static uint8_t keyboard_effective_count(const bsp_keyboard_map_t* map)
 {
     uint8_t n = map->key_count;
     if (n == 0u) {
-        n = BSP_KEYBOARD_SLOTS;
+        n = 1u;
     }
-    if (n > BSP_KEYBOARD_SLOTS) {
-        n = BSP_KEYBOARD_SLOTS;
-    }
-    if (n > 32u) {
-        n = 32u;
+    if (n > BSP_KEYBOARD_KEY_MAX) {
+        n = BSP_KEYBOARD_KEY_MAX;
     }
     return n;
 }
 
-/* 键 i 在面板内的矩形（不含标题栏） */
-static void keyboard_key_rect(const bsp_keyboard_map_t* map, uint8_t key_idx,
-                              SDL_FRect* out)
+static uint8_t keyboard_title_h(const bsp_keyboard_map_t* map)
 {
-    float grid_x = (float)map->x + (float)BSP_KEYBOARD_PAD;
-    float grid_y = (float)map->y + (float)BSP_KEYBOARD_TITLE_H + (float)BSP_KEYBOARD_PAD;
+    if (map->height < 40u) {
+        return 0u;
+    }
+    if (map->height < (uint16_t)(BSP_KEYBOARD_TITLE_H * 3)) {
+        return (uint8_t)(map->height / 6u);
+    }
+    return (uint8_t)BSP_KEYBOARD_TITLE_H;
+}
+
+/* 按面板可用区长宽比选列数，使单元格接近正方形 */
+static void keyboard_grid_dims(const bsp_keyboard_map_t* map, uint8_t key_count,
+                               uint8_t title_h, uint8_t* out_cols, uint8_t* out_rows)
+{
     float grid_w = (float)map->width - 2.0f * (float)BSP_KEYBOARD_PAD;
-    float grid_h = (float)map->height - (float)BSP_KEYBOARD_TITLE_H - 2.0f * (float)BSP_KEYBOARD_PAD;
-    float cell_w = (grid_w - (float)(BSP_KEYBOARD_COLS - 1) * (float)BSP_KEYBOARD_GAP) /
-                   (float)BSP_KEYBOARD_COLS;
-    float cell_h = (grid_h - (float)(BSP_KEYBOARD_ROWS - 1) * (float)BSP_KEYBOARD_GAP) /
-                   (float)BSP_KEYBOARD_ROWS;
-    uint8_t col = (uint8_t)(key_idx % BSP_KEYBOARD_COLS);
-    uint8_t row = (uint8_t)(key_idx / BSP_KEYBOARD_COLS);
+    float grid_h = (float)map->height - (float)title_h - 2.0f * (float)BSP_KEYBOARD_PAD;
+    uint8_t cols;
+    uint8_t rows;
 
-    if (cell_w < 4.0f) {
-        cell_w = 4.0f;
+    if (grid_w < 1.0f) {
+        grid_w = 1.0f;
     }
-    if (cell_h < 4.0f) {
-        cell_h = 4.0f;
+    if (grid_h < 1.0f) {
+        grid_h = 1.0f;
     }
 
-    out->x = grid_x + (float)col * (cell_w + (float)BSP_KEYBOARD_GAP);
-    out->y = grid_y + (float)row * (cell_h + (float)BSP_KEYBOARD_GAP);
+    if (map->cols > 0u) {
+        cols = map->cols;
+        if (cols > key_count) {
+            cols = key_count;
+        }
+        if (cols > BSP_KEYBOARD_KEY_MAX) {
+            cols = BSP_KEYBOARD_KEY_MAX;
+        }
+    } else {
+        float aspect = grid_w / grid_h;
+        int c = (int)ceilf(sqrtf((float)key_count * aspect));
+        if (c < 1) {
+            c = 1;
+        }
+        if (c > (int)key_count) {
+            c = (int)key_count;
+        }
+        if (c > BSP_KEYBOARD_KEY_MAX) {
+            c = BSP_KEYBOARD_KEY_MAX;
+        }
+        cols = (uint8_t)c;
+    }
+
+    rows = (uint8_t)((key_count + cols - 1u) / cols);
+    if (rows < 1u) {
+        rows = 1u;
+    }
+
+    *out_cols = cols;
+    *out_rows = rows;
+}
+
+/* 键 i 在面板内的矩形（铺满可用网格） */
+static void keyboard_key_rect(const bsp_keyboard_t* k, uint8_t key_idx, SDL_FRect* out)
+{
+    const bsp_keyboard_map_t* map = k->map;
+    float grid_x = (float)map->x + (float)BSP_KEYBOARD_PAD;
+    float grid_y = (float)map->y + (float)k->title_h + (float)BSP_KEYBOARD_PAD;
+    float grid_w = (float)map->width - 2.0f * (float)BSP_KEYBOARD_PAD;
+    float grid_h = (float)map->height - (float)k->title_h - 2.0f * (float)BSP_KEYBOARD_PAD;
+    float gap = (float)BSP_KEYBOARD_GAP;
+    float cell_w;
+    float cell_h;
+    uint8_t col = (uint8_t)(key_idx % k->cols);
+    uint8_t row = (uint8_t)(key_idx / k->cols);
+
+    if (grid_w < 1.0f) {
+        grid_w = 1.0f;
+    }
+    if (grid_h < 1.0f) {
+        grid_h = 1.0f;
+    }
+    if (k->cols > 1u) {
+        cell_w = (grid_w - (float)(k->cols - 1u) * gap) / (float)k->cols;
+    } else {
+        cell_w = grid_w;
+    }
+    if (k->rows > 1u) {
+        cell_h = (grid_h - (float)(k->rows - 1u) * gap) / (float)k->rows;
+    } else {
+        cell_h = grid_h;
+    }
+    if (cell_w < 2.0f) {
+        cell_w = 2.0f;
+    }
+    if (cell_h < 2.0f) {
+        cell_h = 2.0f;
+    }
+
+    out->x = grid_x + (float)col * (cell_w + gap);
+    out->y = grid_y + (float)row * (cell_h + gap);
     out->w = cell_w;
     out->h = cell_h;
 }
 
-static int keyboard_hit_key(const bsp_keyboard_map_t* map, uint8_t key_count,
-                            int32_t px, int32_t py)
+static int keyboard_hit_key(const bsp_keyboard_t* k, int32_t px, int32_t py)
 {
     uint8_t i;
     if (px < 0 || py < 0) {
         return -1;
     }
-    for (i = 0; i < key_count; i++) {
+    for (i = 0; i < k->key_count; i++) {
         SDL_FRect r;
-        keyboard_key_rect(map, i, &r);
+        keyboard_key_rect(k, i, &r);
         if ((float)px >= r.x && (float)px < r.x + r.w &&
             (float)py >= r.y && (float)py < r.y + r.h) {
             return (int)i;
@@ -177,14 +252,18 @@ static void keyboard_render(struct SDL_Renderer* renderer, void* ctx)
     SDL_SetRenderDrawColor(renderer, 70, 80, 92, 255);
     SDL_RenderRect(renderer, &bg);
 
-    title = m->name ? m->name : "KEY";
-    SDL_SetRenderDrawColor(renderer, 200, 210, 220, 255);
-    SDL_RenderDebugText(renderer, (float)m->x + 6.0f, (float)m->y + 3.0f, title);
+    if (k->title_h > 0u) {
+        title = m->name ? m->name : "KEY";
+        SDL_SetRenderDrawColor(renderer, 200, 210, 220, 255);
+        SDL_RenderDebugText(renderer, (float)m->x + 6.0f, (float)m->y + 3.0f, title);
+    }
 
     for (i = 0; i < k->key_count; i++) {
         SDL_FRect key;
         int pressed = (k->key_mask & (1u << i)) ? 1 : 0;
-        keyboard_key_rect(m, i, &key);
+        float label_x;
+        float label_y;
+        keyboard_key_rect(k, i, &key);
 
         if (pressed) {
             SDL_SetRenderDrawColor(renderer, 240, 170, 60, 255);
@@ -195,22 +274,18 @@ static void keyboard_render(struct SDL_Renderer* renderer, void* ctx)
         SDL_SetRenderDrawColor(renderer, 90, 105, 120, 255);
         SDL_RenderRect(renderer, &key);
 
-        snprintf(label, sizeof(label), "%u", (unsigned)i);
-        SDL_SetRenderDrawColor(renderer, pressed ? 30 : 190, pressed ? 30 : 200, pressed ? 30 : 210, 255);
-        SDL_RenderDebugText(renderer,
-                            key.x + (key.w - (float)(strlen(label) * SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE)) * 0.5f,
-                            key.y + (key.h - (float)SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE) * 0.5f,
-                            label);
-    }
-
-    /* 未使用的 8x4 槽位画成暗格，提示布局 */
-    for (; i < BSP_KEYBOARD_SLOTS; i++) {
-        SDL_FRect key;
-        keyboard_key_rect(m, i, &key);
-        SDL_SetRenderDrawColor(renderer, 42, 46, 52, 255);
-        SDL_RenderFillRect(renderer, &key);
-        SDL_SetRenderDrawColor(renderer, 55, 60, 68, 255);
-        SDL_RenderRect(renderer, &key);
+        if (key.w >= (float)SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE &&
+            key.h >= (float)SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE) {
+            snprintf(label, sizeof(label), "%u", (unsigned)i);
+            label_x = key.x + (key.w - (float)(strlen(label) * SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE)) * 0.5f;
+            label_y = key.y + (key.h - (float)SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE) * 0.5f;
+            SDL_SetRenderDrawColor(renderer,
+                                   pressed ? 30 : 190,
+                                   pressed ? 30 : 200,
+                                   pressed ? 30 : 210,
+                                   255);
+            SDL_RenderDebugText(renderer, label_x, label_y, label);
+        }
     }
 }
 
@@ -250,7 +325,7 @@ static void keyboard_polling_task(void* arg)
         int hit;
 
         if (input.mouse_left) {
-            hit = keyboard_hit_key(k->map, k->key_count, input.mouse_x, input.mouse_y);
+            hit = keyboard_hit_key(k, input.mouse_x, input.mouse_y);
             if (hit >= 0) {
                 mask = (1u << (uint32_t)hit);
             }
@@ -315,6 +390,8 @@ bsp_keyboard_handle_t bsp_keyboard_open(bsp_keyboard_desc_t* desc)
     k->map = map;
     k->open_cnt = 1;
     k->key_count = keyboard_effective_count(map);
+    k->title_h = keyboard_title_h(map);
+    keyboard_grid_dims(map, k->key_count, k->title_h, &k->cols, &k->rows);
     k->key_mask = 0;
     k->trigger_list = list_create(sizeof(trig_reg_info_t));
     if (!k->trigger_list) {
@@ -330,9 +407,9 @@ bsp_keyboard_handle_t bsp_keyboard_open(bsp_keyboard_desc_t* desc)
     s_keyboards[s_keyboard_count++] = k;
     SDL_UnlockMutex(s_keyboard_lock);
 
-    INFO_LOG("keyboard '%s' open: type=%u idx=%u keys=%u at (%d,%d) %ux%u (8x4)",
+    INFO_LOG("keyboard '%s' open: type=%u idx=%u keys=%u grid=%ux%u at (%d,%d) %ux%u",
              map->name ? map->name : "?",
-             desc->type, desc->idx, k->key_count,
+             desc->type, desc->idx, k->key_count, k->cols, k->rows,
              (int)map->x, (int)map->y, map->width, map->height);
     arch_display_request_frame();
     return (bsp_keyboard_handle_t)k;
