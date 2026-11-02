@@ -2,6 +2,7 @@
 
 #include "bsp/bsp_display.h"
 #include "bsp/bsp_encoder.h"
+#include "bsp/bsp_keyboard.h"
 #include "bsp/bsp_storage.h"
 #include "bsp/bsp_touch.h"
 
@@ -80,6 +81,22 @@
 #define BSP_AUDIO_ENERGY_Y          252
 #define BSP_AUDIO_ENERGY_W          448
 #define BSP_AUDIO_ENERGY_H          80
+
+/***********************************************************************************************************************/
+/**
+ * @brief bsp_keyboard 配置（SDL 鼠标点击模拟）
+ * @note 映射表项结构体在 bsp_keyboard_sdl.c；键位固定 8 列 × 4 行，
+ *       key_count 决定实际显示/有效键数（≤32）。
+ */
+#define BSP_KEYBOARD_POLL_FREQ_HZ   50
+
+#define BSP_KEYBOARD_MAP_TABLE {\
+        {\
+          .type = BSP_KEYBOARD_TYPE_VIRTUAL_TEST, .idx = 0, .name = "PAD",\
+          .x = 8, .y = 340, .width = 448, .height = 168,\
+          .key_count = 16\
+        },\
+    }
 
 /***********************************************************************************************************************/
 /**
