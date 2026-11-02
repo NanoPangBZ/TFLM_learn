@@ -20,6 +20,7 @@
 #include "framework/e_log.h"
 #include "framework/e_polling_pool.h"
 #include "framework/e_sched.h"
+#include "framework/embedded_font.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
@@ -108,18 +109,9 @@ static void encoder_font_init(void)
     }
     s_ttf_ready = 1;
 
-    char path[512];
-    char* base = SDL_GetBasePath();
-    if (base) {
-        snprintf(path, sizeof(path), "%sDejaVuSans.ttf", base);
-        SDL_free(base);
-    } else {
-        snprintf(path, sizeof(path), "DejaVuSans.ttf");
-    }
-
-    s_font = TTF_OpenFont(path, BSP_ENCODER_FONT_SIZE);
+    s_font = embedded_font_open_dejavu(BSP_ENCODER_FONT_SIZE);
     if (!s_font) {
-        WARN_LOG("open font '%s' failed: %s", path, SDL_GetError());
+        WARN_LOG("open embedded DejaVuSans failed: %s", SDL_GetError());
     }
 }
 
