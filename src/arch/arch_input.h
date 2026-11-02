@@ -21,9 +21,15 @@ extern "C" {
 void arch_input_get(arch_input_state_t* state);
 
 /**
+ * @brief 查看累积的滚轮增量（不清零）
+ * @return 正数=向上滚，负数=向下滚
+ */
+int32_t arch_input_peek_wheel(void);
+
+/**
  * @brief 取走并清零累积的滚轮增量
  * @return 正数=向上滚，负数=向下滚
- * @note 由轮询任务调用；多个消费者时只有第一个能拿到。
+ * @note 命中控件后再 take；多消费者用 peek 判断，谁用谁清。
  */
 int32_t arch_input_take_wheel(void);
 

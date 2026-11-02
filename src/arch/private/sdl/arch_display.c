@@ -277,6 +277,11 @@ void arch_input_get(arch_input_state_t* state)
     state->mouse_left = (uint8_t)(SDL_GetAtomicInt(&s_mouse_left) ? 1u : 0u);
 }
 
+int32_t arch_input_peek_wheel(void)
+{
+    return (int32_t)SDL_GetAtomicInt(&s_wheel_delta);
+}
+
 int32_t arch_input_take_wheel(void)
 {
     return (int32_t)SDL_SetAtomicInt(&s_wheel_delta, 0);

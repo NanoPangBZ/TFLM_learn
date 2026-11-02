@@ -2,9 +2,10 @@
 # 含编码器与 BSP 测试；默认不编 num_discern / canvas。
 
 target_sources(${TFLM_APP_TARGET} PRIVATE
-    # ----- bsp encoder / keyboard（本目标专属）-----
+    # ----- bsp encoder / keyboard / knob（本目标专属）-----
     ${CMAKE_SOURCE_DIR}/src/bsp/private/sdl/bsp_encoder_sdl.c
     ${CMAKE_SOURCE_DIR}/src/bsp/private/sdl/bsp_keyboard_sdl.c
+    ${CMAKE_SOURCE_DIR}/src/bsp/private/sdl/bsp_knob_sdl.c
 
     # ----- test -----
     ${CMAKE_SOURCE_DIR}/src/test/bsp_display/bsp_display_test.c

@@ -262,7 +262,7 @@ static void encoder_polling_task(void* arg)
 
     arch_input_state_t input;
     arch_input_get(&input);
-    int32_t wheel = arch_input_take_wheel();
+    int32_t wheel = arch_input_peek_wheel();
     uint32_t now = e_sched_time_ms();
     int need_redraw = 0;
 
@@ -280,7 +280,7 @@ static void encoder_polling_task(void* arg)
         int32_t inc = 0;
         if (inside && wheel != 0) {
             int dir = (m->dir == -1) ? -1 : 1;
-            inc = wheel * dir;
+            inc = arch_input_take_wheel() * dir;
             wheel = 0;
 
             e->position += inc;

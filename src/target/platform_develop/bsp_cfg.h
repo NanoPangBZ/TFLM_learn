@@ -9,7 +9,7 @@
 /**
  * @brief bsp_display
  *
- * 平台开发目标只保留一块主屏（320x240），触摸与之重合；右侧放编码器。
+ * 平台开发目标：主屏 + 右侧 encoder + 底部 keyboard/knob。
  *
  *   [0,0]                 [336,0]
  *   +------------------+  +--------+
@@ -17,6 +17,7 @@
  *   |     320 x 240    |  +--------+
  *   |                  |  |  BPM   |
  *   +------------------+  +--------+
+ *   [keyboard 320x168]    [RV100/101]
  *
  * @note bsp_display_map_t 定义在 bsp_display_sdl.c 内部。
  *       rotation：呈现顺时针角度（度），常用 0/90/180/270。
@@ -98,9 +99,24 @@
 #define BSP_KEYBOARD_MAP_TABLE {\
         {\
           .type = BSP_KEYBOARD_TYPE_VIRTUAL_TEST, .idx = 0, .name = "PAD",\
-          .x = 8, .y = 340, .width = 448, .height = 168,\
+          .x = 8, .y = 340, .width = 320, .height = 168,\
           .key_count = 16, .cols = 0\
         },\
+    }
+
+/***********************************************************************************************************************/
+/**
+ * @brief bsp_knob 配置（SDL 电位器模拟，有限行程 + 红点标位）
+ * @note bsp_knob_map_t 在 bsp_knob_sdl.c；按 name 取句柄（与 YouWei 一致）。
+ *       initial：初始值 0..1；dir：1 顺时针增大，-1 逆时针增大。
+ */
+#define BSP_KNOB_POLL_FREQ_HZ   50
+
+#define BSP_KNOB_MAP_TABLE {\
+        { .name = "RV100", .x = 336, .y = 340, .width = 120, .height = 84,\
+          .initial = 0.5f, .dir = 1 },\
+        { .name = "RV101", .x = 336, .y = 424, .width = 120, .height = 84,\
+          .initial = 0.0f, .dir = 1 },\
     }
 
 /***********************************************************************************************************************/
