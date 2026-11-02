@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 """Download third-party deps into third_party/ (not committed; called by setup).
 
-    SDL3       -> third_party/SDL3/
-    SDL3_ttf   -> third_party/SDL3_ttf/   (statically bundles FreeType)
-    DejaVuSans -> third_party/fonts/DejaVuSans.ttf
+    SDL3 / SDL3_ttf 源码 -> 编成静态库 third_party/sdl_static/（exe 无第三方 DLL）
+    DejaVuSans           -> third_party/fonts/DejaVuSans.ttf
 
 Stdlib only; on Windows uses Python's OpenSSL stack (avoids schannel TLS issues).
 """
 import os
 import platform
 import shutil
+import subprocess
 import sys
 import urllib.request
 import zipfile
-
-SDL3_VERSION = "3.4.18"
-SDL3_TTF_VERSION = "3.2.2"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TP = os.path.join(ROOT, "third_party")
@@ -26,23 +23,6 @@ def download(url, dest):
     req = urllib.request.Request(url, headers={"User-Agent": "tflm-learn-setup/1.0"})
     with urllib.request.urlopen(req, timeout=180) as r, open(dest, "wb") as f:
         shutil.copyfileobj(r, f)
-
-
-def fetch_mingw(name, version, repo, asset):
-    dest = os.path.join(TP, name)
-    if os.path.isdir(dest):
-        print(f"  {name} present, skip")
-        return
-    url = f"https://github.com/libsdl-org/{repo}/releases/download/release-{version}/{asset}"
-    archive = os.path.join(TP, asset)
-    download(url, archive)
-    with zipfile.ZipFile(archive) as z:
-        z.extractall(TP)
-    os.remove(archive)
-    src = os.path.join(TP, f"{name}-{version}")
-    if os.path.isdir(src):
-        os.replace(src, dest)
-    print(f"  {name} ready -> {dest}")
 
 
 def fetch_font():
@@ -65,15 +45,21 @@ def fetch_font():
     print(f"  DejaVuSans.ttf ready -> {ttf}")
 
 
+def build_static_sdl():
+    script = os.path.join(ROOT, "scripts", "build_sdl_static.py")
+    rc = subprocess.call([sys.executable, script])
+    if rc != 0:
+        raise SystemExit(rc)
+
+
 def main():
     os.makedirs(TP, exist_ok=True)
     if platform.system() != "Windows":
         print("On Linux/macOS, install SDL3 / SDL3_ttf via your package manager (see setup.sh).")
         return 0
 
-    fetch_mingw("SDL3", SDL3_VERSION, "SDL", f"SDL3-devel-{SDL3_VERSION}-mingw.zip")
-    fetch_mingw("SDL3_ttf", SDL3_TTF_VERSION, "SDL_ttf", f"SDL3_ttf-devel-{SDL3_TTF_VERSION}-mingw.zip")
     fetch_font()
+    build_static_sdl()
     print("All dependencies ready.")
     return 0
 

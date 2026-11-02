@@ -15,9 +15,9 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1   rem Windows
 bash setup.sh                                            rem Linux/macOS
 ```
 
-- Python 虚拟环境在 `.venv/`，SDL3/SDL3_ttf/字体在 `third_party/`，都 gitignore。
-- 依赖由 `scripts/fetch_deps.py` 下载（SDL3 3.4.18、SDL3_ttf 3.2.2 内置 FreeType 2.13.2、DejaVuSans.ttf）。
-- 工具链：MinGW-w64 + CMake（`build.py` 会自动检测生成器）。
+- Python 虚拟环境在 `.venv/`，SDL3 静态库/字体在 `third_party/`，都 gitignore。
+- 依赖由 `scripts/fetch_deps.py` → `build_sdl_static.py` 编出静态 SDL3/SDL3_ttf（3.4.18 / 3.2.2）到 `third_party/sdl_static/`；字体 DejaVuSans.ttf。
+- 工具链：MinGW-w64 + CMake（`build.py` 会自动检测生成器）；链接加 `-static`，exe 不依赖 SDL3.dll / MinGW 运行时 DLL。
 
 ## 构建 / 调试
 
@@ -30,7 +30,7 @@ build.bat platform_develop release     rem 平台开发目标 Release
 build.bat --clean TFLM_LEARN debug     rem 先清理再构建
 ```
 
-- 产物在 `build/<target>/<debug|release>/`，可执行文件名与目标名一致（如 `TFLM_LEARN.exe`；SDL3.dll 自动拷贝到产物目录）。
+- 产物在 `build/<target>/<debug|release>/`，可执行文件名与目标名一致（如 `TFLM_LEARN.exe`；静态链接，仅拷贝字体等数据文件）。
 - VS Code/Cursor：**F5** → QuickPick 选 target → 自动构建 debug 并用 gdb 启动（`C:\mingw64\bin\gdb.exe`）；**Ctrl+Shift+B** 同样先选 target 再构建 debug。
 - 新增/删除 `src/target/<name>` 后跑一次 `build.bat --sync-vscode`（或任意构建）可刷新 F5 下拉列表。
 - 需要 Microsoft C/C++ 扩展（`ms-vscode.cpptools`）。
@@ -79,7 +79,7 @@ tools/                    Python/C 工具
 2. **.bat 必须纯 ASCII**：中文在 cmd 里按 GBK 逐字节解析会切碎命令，`chcp 65001` 在第二行来不及生效。构建入口 `build.bat` 因此做成 ASCII 薄壳，交互逻辑交给 Python（`build.py`）。
 3. **PowerShell 不会从当前目录执行 .bat**（需要 `.\` 前缀）：VS Code 任务要用 `cmd /c build.bat ...` 而非 `build.bat`。
 4. **鼠标连画断触**：`MOUSE_MOTION` 是离散采样，快速拖动会跳像素；要在相邻两点间插值盖章（`fb_stroke`）。
-5. **SDL3_ttf 静态内置 FreeType**：无需单独下载 freetype；`TTF_GetFreeTypeVersion()` 可验证。
+5. **SDL 静态链接**：`third_party/sdl_static` 由源码编出；`cmake/sdl3.cmake` 链 `SDL3::SDL3-static` / `SDL3_ttf::SDL3_ttf-static`，MinGW 再加 `-static`；exe 旁只需字体等数据文件，不要再拷 SDL3.dll。
 6. **调试符号**：不加 `-g` 的 exe 无法打断点。
 7. **MinGW PE 链接段注册不可用**：参考工程的 `__attribute__((section("__function_regedit")))` 段注册在 MinGW 下失效（`#pragma pack(1)`+位域导致不同编译单元 `sizeof(function_item_t)` 不一致、段按 16 字节对齐插入填充），框架改用 GCC 构造函数 + 静态注册表（`c_function_regedit_add`）等价实现，接口宏/结构体保持逐字一致。
 8. **SDL3 3.4.18 API 命名**：原子指针是 `void**` + `SDL_Get/SetAtomicPointer`（非 `SDL_AtomicPtr`）；线程优先级用 `SDL_SetCurrentThreadPriority`（非 `SDL_SetThreadPriority`）；优先级枚举只有 LOW/NORMAL/HIGH/TIME_CRITICAL。

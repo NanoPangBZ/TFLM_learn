@@ -10,7 +10,7 @@
     build.bat --list-targets               # 打印可用 target（一行一个）
 
 产物输出到 build/<target>/<debug|release>/，可执行文件名与目标名一致
-（如 TFLM_LEARN.exe；SDL3.dll 由 CMake 自动拷贝到产物目录）。
+（如 TFLM_LEARN.exe；SDL 静态链接，无需拷贝 SDL3.dll）。
 
 由根目录 build.bat 调用（build.bat 负责找 Python 并切换控制台为 UTF-8）。
 交互菜单全部在本 Python 脚本内实现（非 bat）。
