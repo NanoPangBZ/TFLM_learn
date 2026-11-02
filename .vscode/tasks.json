@@ -5,35 +5,122 @@
             "label": "build (debug)",
             "type": "shell",
             "command": "cmd",
-            "args": ["/c", "build.bat", "debug"],
-            "group": { "kind": "build", "isDefault": true },
-            "presentation": { "reveal": "always", "panel": "shared" },
-            "problemMatcher": []
+            "args": [
+                "/c",
+                "build.bat",
+                "${input:tflmTarget}",
+                "debug"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": false
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
         },
         {
             "label": "build (release)",
             "type": "shell",
             "command": "cmd",
-            "args": ["/c", "build.bat", "release"],
-            "group": "build",
-            "presentation": { "reveal": "always", "panel": "shared" },
-            "problemMatcher": []
+            "args": [
+                "/c",
+                "build.bat",
+                "${input:tflmTarget}",
+                "release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": false
+            },
+            "problemMatcher": [],
+            "group": "build"
         },
         {
             "label": "clean (debug)",
             "type": "shell",
             "command": "cmd",
-            "args": ["/c", "build.bat", "--clean", "debug"],
-            "presentation": { "reveal": "always", "panel": "shared" },
+            "args": [
+                "/c",
+                "build.bat",
+                "--clean",
+                "${input:tflmTarget}",
+                "debug"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": false
+            },
             "problemMatcher": []
         },
         {
-            "label": "clean (release)",
+            "label": "build TFLM_LEARN (debug)",
             "type": "shell",
             "command": "cmd",
-            "args": ["/c", "build.bat", "--clean", "release"],
-            "presentation": { "reveal": "always", "panel": "shared" },
+            "args": [
+                "/c",
+                "build.bat",
+                "TFLM_LEARN",
+                "debug"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": false
+            },
+            "problemMatcher": [],
+            "group": "build"
+        },
+        {
+            "label": "build platform_develop (debug)",
+            "type": "shell",
+            "command": "cmd",
+            "args": [
+                "/c",
+                "build.bat",
+                "platform_develop",
+                "debug"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": false
+            },
+            "problemMatcher": [],
+            "group": "build"
+        },
+        {
+            "label": "sync vscode targets",
+            "type": "shell",
+            "command": "cmd",
+            "args": [
+                "/c",
+                "build.bat",
+                "--sync-vscode"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": false
+            },
             "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "tflmTarget",
+            "type": "pickString",
+            "description": "选择编译目标 (src/target)",
+            "options": [
+                "TFLM_LEARN",
+                "platform_develop"
+            ],
+            "default": "TFLM_LEARN"
         }
     ]
 }

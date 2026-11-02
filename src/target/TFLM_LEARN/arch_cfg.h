@@ -5,7 +5,7 @@
  * bsp_display 等外设只是窗口里的一块区域（见 bsp_cfg.h），不再各自开窗。
  * 窗口允许拖动缩放；各区域按像素 1:1 布局，窗口小于区域时超出部分被裁剪。 */
 
-#define ARCH_WINDOW_TITLE           "TFLM_learn (SDL3 board)"
+#define ARCH_WINDOW_TITLE           "TFLM_LEARN (SDL3 board)"
 #define ARCH_WINDOW_WIDTH           800
 #define ARCH_WINDOW_HEIGHT          490
 

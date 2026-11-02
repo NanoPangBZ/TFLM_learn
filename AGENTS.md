@@ -21,45 +21,54 @@ bash setup.sh                                            rem Linux/macOS
 
 ## 构建 / 调试
 
+必须手动选择编译目标（`TFLM_LEARN` / `platform_develop`）与配置（`debug` / `release`）：
+
 ```bat
-build.bat               rem 默认构建 debug
-build.bat debug         rem Debug（-g -O0）
-build.bat release       rem Release（-O2 -DNDEBUG）
-build.bat --clean debug rem 先清理再构建
+build.bat                              rem 交互菜单选 target + 配置
+build.bat TFLM_LEARN debug             rem TFLM 学习目标 Debug
+build.bat platform_develop release     rem 平台开发目标 Release
+build.bat --clean TFLM_LEARN debug     rem 先清理再构建
 ```
 
-- 编译整个 `src/` 框架，产物在 `build/debug/` / `build/release/`，可执行文件 `tflm_framework.exe`（SDL3.dll 自动拷贝到产物目录）。
-- VS Code/Cursor：**Ctrl+Shift+B** 构建 debug、**F5** 自动构建后用 gdb 调试（`C:\mingw64\bin\gdb.exe`）。
+- 产物在 `build/<target>/<debug|release>/`，可执行文件名与目标名一致（如 `TFLM_LEARN.exe`；SDL3.dll 自动拷贝到产物目录）。
+- VS Code/Cursor：**F5** → QuickPick 选 target → 自动构建 debug 并用 gdb 启动（`C:\mingw64\bin\gdb.exe`）；**Ctrl+Shift+B** 同样先选 target 再构建 debug。
+- 新增/删除 `src/target/<name>` 后跑一次 `build.bat --sync-vscode`（或任意构建）可刷新 F5 下拉列表。
 - 需要 Microsoft C/C++ 扩展（`ms-vscode.cpptools`）。
 
 ## 目录结构与约定
 
 ```
-CMakeLists.txt       根构建脚本（编译整个 src/）
-build.bat            构建入口（debug / release，委托 scripts/build.py）
-scripts/build.py     构建脚本（debug / release / --clean / TMP 重定向）
-scripts/fetch_deps.py 下载第三方依赖到 third_party/
-cmake/sdl3.cmake     共享 SDL3 定位，提供 sdl3_attach() / sdl3_ttf_attach()
-src/                 框架源码（镜像参考工程结构，见 README）
-    arch_cfg.h       arch 主窗口配置（标题/默认尺寸/可缩放/背景色）
-    arch/            arch 层：主窗口 + 渲染器 + 帧循环（arch_display.c）、arch_input.h
-    bsp_cfg.h        BSP_DISPLAY_MAP_TABLE / BSP_TOUCH_MAP_TABLE / BSP_STORAGE_MAP_TABLE / BSP_ENCODER_MAP_TABLE
-    app/common/      debug_display.c：把 app 中间图像写到 display 1/2/3
-tools/                Python/C 工具（train_mnist_mlp.py 训练导出权重、验证脚本）
-.vscode/             tasks.json + launch.json（F5 构建·调试）
+CMakeLists.txt            根构建：统一编 framework/arch/公共bsp/lib；要求 -DTFLM_TARGET=
+build.bat                 构建入口（委托 scripts/build.py）
+scripts/build.py          交互/CLI 选 target + debug|release；产物 build/<target>/<config>/
+scripts/fetch_deps.py     下载第三方依赖到 third_party/
+cmake/sdl3.cmake          sdl3_attach() / sdl3_ttf_attach()
+src/
+  main.c                  统一入口
+  framework/              框架接口 + private/sdl 实现（根 CMake 统一包含）
+  arch/                   arch 层实现
+  bsp/                    BSP 实现（encoder 仅由需要它的 target 追加）
+  app/                    应用（由 target 私有 CMakeLists 勾选）
+  service/                服务（由 target 私有 CMakeLists 勾选）
+  target/
+    TFLM_LEARN/           cfg（含 version.h，无 encoder）+ 私有 CMakeLists
+    platform_develop/     cfg（含 version.h + encoder）+ 私有 CMakeLists
+tools/                    Python/C 工具
+.vscode/                  tasks.json + launch.json
 ```
 
 **约定：**
-1. 框架源码在 `src/`，接口头在 `src/framework/*.h`，SDL 后端实现在 `src/framework/private/sdl/*.c`。
-2. 构建目标只有 `debug` / `release` 两个，可执行文件名固定为 `tflm_framework`（launch.json 按此定位）。
-3. Debug 默认 `-g -O0`（调试符号 + 关优化），保证断点可用。
-4. 在 `src/` 下新增源文件后，需在根 `CMakeLists.txt` 的 `FRAMEWORK_SOURCES` 中登记。
+1. 框架源码在 `src/`，接口头在 `src/framework/*.h`，SDL 后端在 `src/framework/private/sdl/*.c`；由**根** `CMakeLists.txt` 的 `COMMON_SOURCES` 统一登记。
+2. per-target 配置头（`arch_cfg.h` / `bsp_cfg.h` / `framework_cfg.h` / `service_cfg.h` / `version.h`）只放在 `src/target/<name>/`；include 顺序为该目录优先于 `src/`。
+3. app / service / 专属 test / 可选 bsp（如 encoder）由 `src/target/<name>/CMakeLists.txt` 用 `target_sources(${TFLM_APP_TARGET} ...)` 追加。
+4. 可执行文件名与 target 目录名一致（`build/<name>/<config>/<name>.exe`）。
+5. Debug 默认 `-g -O0`，保证断点可用。
 
 ## 当前进度
 
 - [x] 环境搭建（TensorFlow 2.21.0 + SDL3 + SDL3_ttf，setup 一键复现）
 - [x] 基础软件框架（src/，镜像参考工程：16 个框架接口 + SDL3 后端实现）
-- [x] 构建系统（build.bat → build.py：debug / release 两个目标）
+- [x] 多目标构建（`TFLM_LEARN` / `platform_develop`；cfg 按 target 分离）
 - [x] VS Code/Cursor F5 构建 + gdb 调试配置
 - [ ] P1 正弦波：密集网络拟合 sin，int8 量化后 SDL 实时画「预测 vs 真值」
 - [x] num_discern：手写数字识别 app（MLP 784→32→10 float32，MNIST 95%；canvas 空闲触发 → 预处理 28×28 → 推理 → 日志输出）
@@ -78,7 +87,7 @@ tools/                Python/C 工具（train_mnist_mlp.py 训练导出权重、
 10. **e_heap 是 bump 分配器、`e_heap_free` 为空操作**：只「分配一次、永不释放」（同 TFLM arena 模式）。热路径/回调里不能反复 `e_heap_malloc`（每次永久吃堆，几次即耗尽），应改用静态缓冲或一次性分配。
 11. **arch 统一主窗口，bsp_display/bsp_touch 按 map table 多实例**：窗口/渲染器由 `arch/private/sdl/arch_display.c` 创建，`RenderClear` / `RenderPresent` 全部在 arch 主线程完成；`bsp_cfg.h` 用 `BSP_DISPLAY_MAP_TABLE` / `BSP_TOUCH_MAP_TABLE` 把 `type+idx` 映射到主窗口内的矩形（1:1、超出裁剪），每个 idx 是独立实例。`bsp_display_flush` 只更新内存 staging 并请求重绘，禁止在轮询线程直接调用 SDL 渲染。app 的中间图像通过 `src/app/common/debug_display.c` 写到 display 1/2/3，不再开独立窗口。RGBX8888 的 uint32 是 `0xRRGGBBXX`（R 在高字节），不是 ARGB。
 12. **bsp_storage 用固定大小 bin 模拟 NOR flash**：`BSP_STORAGE_MAP_TABLE` 每项按 `type+index` 映射到 `flash_data/<filename>.bin`，文件大小必须等于 `total_size`，不一致就重建并填 `erase_value`（0xFF）。读/写允许任意地址和长度（写跨 `program_unit` 页会自动读改写，未擦除区域按 `old & data` 生效，只能 1→0）；只有擦除要求地址/长度按 `erase_unit` 对齐并填 `erase_value`。实现走 SDL_IOStream，不直接用 stdio。
-13. **bsp_encoder 映射表在 cfg、结构体在 .c**：`BSP_ENCODER_MAP_TABLE`（type/idx/name/x/y/w/h）保留在 `bsp_cfg.h`；`bsp_encoder_map_t` 只在 `bsp/private/sdl/bsp_encoder_sdl.c` 内定义，不污染 `bsp_encoder.h` 标准接口。该 `.c` 用 `REGEDIT_BSP_INIT_FUNCTION` 主动打开映射表里的编码器并注册 arch 渲染回调，启动即显示；`arch_display_pump` 只把鼠标位置/左键/滚轮累积到 `arch_input`，编码器内部不注册 SDL 事件回调，而是由 `e_polling_pool` 按 `BSP_ENCODER_POLL_FREQ_HZ` 统一轮询；名字用 SDL_ttf 渲染，需要 `sdl3_ttf_attach`。
+13. **bsp_encoder 仅 platform_develop**：映射表在该 target 的 `bsp_cfg.h`；`bsp_encoder_sdl.c` 由该 target 私有 CMakeLists 追加并 `sdl3_ttf_attach`。`TFLM_LEARN` 的 `bsp_cfg.h` 不含 encoder 宏，也不编译 encoder 源码。`bsp_encoder_map_t` 只在 `.c` 内定义；启动用 `REGEDIT_BSP_INIT_FUNCTION` 打开映射表并注册 arch 渲染回调；由 `e_polling_pool` 按 `BSP_ENCODER_POLL_FREQ_HZ` 轮询。
 
 ## 已锁定版本
 

@@ -2,10 +2,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug framework (gdb)",
+            "name": "Debug (gdb)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug/tflm_framework.exe",
+            "program": "${workspaceFolder}/build/${input:tflmTarget}/debug/${input:tflmTarget}.exe",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -13,7 +13,7 @@
             "externalConsole": false,
             "MIMode": "gdb",
             "miDebuggerPath": "C:/mingw64/bin/gdb.exe",
-            "preLaunchTask": "build (debug)",
+            "preLaunchTask": "build ${input:tflmTarget} (debug)",
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
@@ -21,6 +21,18 @@
                     "ignoreFailures": true
                 }
             ]
+        }
+    ],
+    "inputs": [
+        {
+            "id": "tflmTarget",
+            "type": "pickString",
+            "description": "选择编译目标 (src/target)",
+            "options": [
+                "TFLM_LEARN",
+                "platform_develop"
+            ],
+            "default": "TFLM_LEARN"
         }
     ]
 }

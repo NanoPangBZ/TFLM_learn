@@ -7,8 +7,10 @@ rem  build.bat - thin wrapper. Delegates to scripts/build.py
 rem  (pure-ASCII so the batch parser never chokes on encoding).
 rem
 rem  Usage:
-rem    build.bat            interactive menu to pick a target
-rem    build.bat <target>   build directly, e.g. build.bat 0_sdl_setup
+rem    build.bat                         interactive: pick target + config
+rem    build.bat TFLM_LEARN debug
+rem    build.bat platform_develop release
+rem    build.bat --clean TFLM_LEARN debug
 rem ============================================================
 
 rem --- locate a Python: prefer the repo's .venv, else any python on PATH ---

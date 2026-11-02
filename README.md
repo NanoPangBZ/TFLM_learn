@@ -58,24 +58,24 @@ verify\02_sdl3_smoke\build\sdl3_smoke.exe
 ```
 TFLM_learn/
 ├── setup.ps1 / setup.sh   # 一键安装环境（首选）
-├── build.bat              # 构建入口（debug / release，委托 scripts/build.py）
-├── CMakeLists.txt         # 根构建脚本（编译整个 src/）
+├── build.bat              # 构建入口（须选 target + debug/release）
+├── CMakeLists.txt         # 根：统一编 framework；要求 -DTFLM_TARGET=
 ├── requirements.txt       # Python 依赖（已锁定版本）
 ├── cmake/
 │   └── sdl3.cmake         # 共享的 SDL3 定位 / 链接 helper
 ├── scripts/
 │   ├── fetch_deps.py      # 下载 SDL3 / SDL3_ttf / 字体到 third_party/
-│   └── build.py           # build.bat 背后的构建脚本（debug / release）
+│   └── build.py           # 交互/CLI 选 target + 配置
 ├── .vscode/               # tasks.json + launch.json（F5 构建·调试）
-├── src/                   # 基础软件框架（镜像参考工程结构）
+├── src/
 │   ├── main.c             # 统一入口
-│   ├── framework_cfg.h    # SDL 后端配置
-│   ├── framework/         # 16 个接口头 + private/sdl 实现
+│   ├── framework/         # 框架接口 + private/sdl（根 CMake 统一包含）
 │   ├── lib/               # com_host / symbol_table
-│   └── app/               # 应用（app_demo.c 验证框架）
+│   ├── app/               # 应用（由 target 私有 CMakeLists 勾选）
+│   └── target/
+│       ├── TFLM_LEARN/    # cfg（无 encoder）+ 私有 CMakeLists
+│       └── platform_develop/  # cfg（含 encoder）+ BSP 测试
 ├── verify/                # 安装验证冒烟测试
-│   ├── 01_tensorflow_smoke.py
-│   └── 02_sdl3_smoke/
 ├── .venv/                 # （不提交）本地虚拟环境
 └── third_party/           # （不提交）SDL3 / SDL3_ttf / 字体
 ```
@@ -83,22 +83,21 @@ TFLM_learn/
 ## 构建
 
 ```bat
-build.bat               rem 默认构建 debug
-build.bat debug         rem Debug（-g -O0，带调试符号）
-build.bat release       rem Release（-O2 -DNDEBUG）
-build.bat --clean debug rem 先清理再构建
+build.bat                              rem 交互菜单选 target + 配置
+build.bat TFLM_LEARN debug             rem TFLM 学习目标 Debug
+build.bat platform_develop release     rem 平台开发目标 Release
+build.bat --clean TFLM_LEARN debug     rem 先清理再构建
 ```
 
-编译整个 `src/` 框架，产物分别输出到 `build/debug/` 与 `build/release/`，
-可执行文件均为 `tflm_framework.exe`（SDL3.dll 由 CMake 自动拷贝到产物目录）。
+产物输出到 `build/<target>/<debug|release>/`，可执行文件名与目标名一致（如 `TFLM_LEARN.exe`）。
 脚本自动选择生成器（优先 MinGW，否则交给 CMake 自动选 MSVC/Ninja）。
 
 ## VS Code / Cursor 调试
 
 已内置 `.vscode/tasks.json` 和 `.vscode/launch.json`：
 
-- **Ctrl+Shift+B** —— 构建 debug（默认构建任务）
-- **F5** —— 自动构建 debug 后用 gdb 调试 `build/debug/tflm_framework.exe`
+- **Ctrl+Shift+B** —— 构建 `TFLM_LEARN` debug（默认构建任务）
+- **F5** —— 可选 `Debug TFLM_LEARN` / `Debug platform_develop`
 
 Debug 目标以 `-g -O0` 编译，带调试符号可正常打断点。
 需要 Microsoft C/C++ 扩展（ms-vscode.cpptools），gdb 路径为 `C:\mingw64\bin\gdb.exe`。

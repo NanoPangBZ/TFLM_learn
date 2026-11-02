@@ -3,16 +3,16 @@
 /****************************产品定义**************************************/
 
 // 固定头魔数
-#define MAGIC_NUNBER "TFLMLearn"
+#define MAGIC_NUNBER "TFLMPlat"
 
 // 系列 - 学习/验证工具
 #define SERIES_NAME     "Learning Tools"
 // 产品
-#define PRODUCT_NAME    "TFLM_learn_framework"
+#define PRODUCT_NAME    "platform_develop"
 // 项目
 #define PROJECT_NAME    "TFLM_learn"
 // 描述
-#define BRIEF_DESCRIPTION "用于学习与验证 TFLM 的基础软件框架（SDL3 后端）"
+#define BRIEF_DESCRIPTION "平台开发目标：BSP / 框架验证（SDL3 后端）"
 // 硬件平台
 #define BOARD_NAME "PC (SDL3 simulated MCU)"
 
