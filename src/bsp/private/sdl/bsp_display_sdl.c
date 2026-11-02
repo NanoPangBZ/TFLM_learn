@@ -26,7 +26,9 @@
 
 #define MALLOC(size)  e_heap_malloc((size), E_HEAP_ATTR_DEFAULT)
 
-/* 显示器映射表项：只属于本实现，不污染 bsp_display.h 标准接口 */
+/* 显示器映射表项：只属于本实现，不污染 bsp_display.h 标准接口。
+ * width/height 为逻辑分辨率（draw_buffer / get_size）；
+ * rotation 为呈现到窗口时的顺时针角度（度），常用 0/90/180/270。 */
 typedef struct bsp_display_map_t {
     bsp_display_type_t type;
     uint8_t            idx;
@@ -34,6 +36,7 @@ typedef struct bsp_display_map_t {
     int16_t            y;
     uint16_t           width;
     uint16_t           height;
+    uint16_t           rotation;
 } bsp_display_map_t;
 
 /* 显示器映射表：由 bsp_cfg.h 提供，type + idx 唯一确定一块区域 */
@@ -127,13 +130,27 @@ static void bsp_display_render(SDL_Renderer* renderer, void* ctx)
         return;
     }
 
+    const float w = (float)d->map->width;
+    const float h = (float)d->map->height;
+    const uint16_t rot = d->map->rotation % 360u;
+    const int swap_wh = (rot == 90u || rot == 270u);
+    const float out_w = swap_wh ? h : w;
+    const float out_h = swap_wh ? w : h;
+
+    /* dst 是旋转前的纹理框；绕其中心旋转后落入 (x,y) 的 out_w×out_h AABB */
     SDL_FRect dst = {
-        (float)d->map->x,
-        (float)d->map->y,
-        (float)d->map->width,
-        (float)d->map->height,
+        (float)d->map->x + (out_w - w) * 0.5f,
+        (float)d->map->y + (out_h - h) * 0.5f,
+        w,
+        h,
     };
-    SDL_RenderTexture(renderer, d->texture, NULL, &dst);
+    if (rot == 0u) {
+        SDL_RenderTexture(renderer, d->texture, NULL, &dst);
+    } else {
+        SDL_FPoint center = { w * 0.5f, h * 0.5f };
+        SDL_RenderTextureRotated(renderer, d->texture, NULL, &dst,
+                                 (double)rot, &center, SDL_FLIP_NONE);
+    }
 }
 
 bsp_display_handle_t bsp_display_open(bsp_display_desc_t* desc)
@@ -195,9 +212,9 @@ bsp_display_handle_t bsp_display_open(bsp_display_desc_t* desc)
     }
     d->render_registered = 1;
 
-    INFO_LOG("display idx=%u opened: %ux%u at (%d,%d)",
+    INFO_LOG("display idx=%u opened: %ux%u at (%d,%d) rot=%u",
              (unsigned)map->idx, (unsigned)map->width, (unsigned)map->height,
-             (int)map->x, (int)map->y);
+             (int)map->x, (int)map->y, (unsigned)map->rotation);
 
     return (bsp_display_handle_t)d;
 

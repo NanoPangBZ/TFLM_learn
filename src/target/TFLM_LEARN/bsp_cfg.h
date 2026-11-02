@@ -8,22 +8,29 @@
 /**
  * @brief bsp_display
  * @note bsp_display_map_t 定义在 bsp_display_sdl.c 内部。
+ *       rotation：呈现顺时针角度（度），常用 0/90/180/270。
  */
 
 #define BSP_DISPLAY_MAP_TABLE {\
-        { .type = BSP_DISPLAY_TYPE_USER, .idx = 0, .x = 0,   .y = 0,   .width = 320, .height = 240 },\
-        { .type = BSP_DISPLAY_TYPE_USER, .idx = 1, .x = 330, .y = 0,   .width = 320, .height = 240 },\
-        { .type = BSP_DISPLAY_TYPE_USER, .idx = 2, .x = 330, .y = 250, .width = 224, .height = 224 },\
-        { .type = BSP_DISPLAY_TYPE_USER, .idx = 3, .x = 564, .y = 250, .width = 224, .height = 224 },\
+        { .type = BSP_DISPLAY_TYPE_USER, .idx = 0,\
+          .x = 0,   .y = 0,   .width = 320, .height = 240, .rotation = 0 },\
+        { .type = BSP_DISPLAY_TYPE_USER, .idx = 1,\
+          .x = 330, .y = 0,   .width = 320, .height = 240, .rotation = 0 },\
+        { .type = BSP_DISPLAY_TYPE_USER, .idx = 2,\
+          .x = 330, .y = 250, .width = 224, .height = 224, .rotation = 0 },\
+        { .type = BSP_DISPLAY_TYPE_USER, .idx = 3,\
+          .x = 564, .y = 250, .width = 224, .height = 224, .rotation = 0 },\
     }
 
 /***********************************************************************************************************************/
 /**
  * @brief bsp_touch
  * @note bsp_touch_map_t 定义在 bsp_touch_sdl.c 内部。
+ *       rotation：与配对 display 同值；命中旋转后 AABB，回报逻辑坐标。
  */
 #define BSP_TOUCH_MAP_TABLE {\
-        { .type = BSP_TOUCH_TYPE_USER, .idx = 0, .x = 0, .y = 0, .width = 320, .height = 240 },\
+        { .type = BSP_TOUCH_TYPE_USER, .idx = 0,\
+          .x = 0, .y = 0, .width = 320, .height = 240, .rotation = 0 },\
     }
 
 /***********************************************************************************************************************/

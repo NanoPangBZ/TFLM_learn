@@ -22,7 +22,9 @@
 
 #define MALLOC(size)  e_heap_malloc((size), E_HEAP_ATTR_DEFAULT)
 
-/* 触摸区域映射表项：只属于本实现，不污染 bsp_touch.h 标准接口 */
+/* 触摸区域映射表项：只属于本实现，不污染 bsp_touch.h 标准接口。
+ * width/height 为逻辑分辨率（与配对 display 的 get_size 一致）；
+ * rotation 为呈现顺时针角度（度），命中用旋转后 AABB，回报坐标做逆变换。 */
 typedef struct bsp_touch_map_t {
     bsp_touch_type_t type;
     uint8_t          idx;
@@ -30,6 +32,7 @@ typedef struct bsp_touch_map_t {
     int16_t          y;
     uint16_t         width;
     uint16_t         height;
+    uint16_t         rotation;
 } bsp_touch_map_t;
 
 /* 触摸区域映射表：由 bsp_cfg.h 提供，type + idx 唯一确定一块区域 */
@@ -53,7 +56,7 @@ static const bsp_touch_map_t* touch_map_find(bsp_touch_type_t type, uint8_t idx)
     return NULL;
 }
 
-/* 窗口坐标 -> 触摸区局部坐标；区域外则 inside = 0 */
+/* 窗口坐标 -> 逻辑触摸坐标；命中旋转后 AABB，再逆旋转到逻辑系 */
 static void touch_update_point(bsp_touch_t* t, float window_x, float window_y)
 {
     int px = (int)window_x;
@@ -64,15 +67,44 @@ static void touch_update_point(bsp_touch_t* t, float window_x, float window_y)
         return;
     }
 
-    int x = px - t->map->x;
-    int y = py - t->map->y;
-    if (x < 0 || y < 0 || x >= t->map->width || y >= t->map->height) {
+    const bsp_touch_map_t* m = t->map;
+    const uint16_t rot = m->rotation % 360u;
+    const int swap_wh = (rot == 90u || rot == 270u);
+    const int out_w = swap_wh ? (int)m->height : (int)m->width;
+    const int out_h = swap_wh ? (int)m->width : (int)m->height;
+    const int w = (int)m->width;
+    const int h = (int)m->height;
+
+    const int sx = px - m->x;
+    const int sy = py - m->y;
+    if (sx < 0 || sy < 0 || sx >= out_w || sy >= out_h) {
         t->inside = 0;
         return;
     }
 
-    t->point.x = x;
-    t->point.y = y;
+    int lx;
+    int ly;
+    switch (rot) {
+        case 90:
+            lx = sy;
+            ly = h - 1 - sx;
+            break;
+        case 180:
+            lx = w - 1 - sx;
+            ly = h - 1 - sy;
+            break;
+        case 270:
+            lx = w - 1 - sy;
+            ly = sx;
+            break;
+        default:
+            lx = sx;
+            ly = sy;
+            break;
+    }
+
+    t->point.x = lx;
+    t->point.y = ly;
     t->inside = 1;
 }
 

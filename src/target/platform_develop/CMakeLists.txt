@@ -7,7 +7,7 @@ target_sources(${TFLM_APP_TARGET} PRIVATE
     ${CMAKE_SOURCE_DIR}/src/bsp/private/sdl/bsp_keyboard_sdl.c
 
     # ----- test -----
-    # ${CMAKE_SOURCE_DIR}/src/test/bsp_display/bsp_display_test.c
+    ${CMAKE_SOURCE_DIR}/src/test/bsp_display/bsp_display_test.c
     # ${CMAKE_SOURCE_DIR}/src/test/bsp_touch/bsp_touch_test.c
     # ${CMAKE_SOURCE_DIR}/src/test/bsp_encoder/bsp_encoder_test.c
     ${CMAKE_SOURCE_DIR}/src/test/bsp_keyboard/bsp_keyboard_test.c
