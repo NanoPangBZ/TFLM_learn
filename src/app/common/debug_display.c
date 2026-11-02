@@ -7,13 +7,14 @@
 
 #include <string.h>
 
-/* 0xRRGGBB -> RGB565 */
+/* 0xRRGGBB -> RGB565_SWAPPED（与 bsp_display 缓冲一致） */
 static uint16_t rgb888_to_rgb565(uint32_t color)
 {
     uint32_t r = (color >> 16) & 0xFFu;
     uint32_t g = (color >> 8) & 0xFFu;
     uint32_t b = color & 0xFFu;
-    return (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    uint16_t c = (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    return (uint16_t)((c << 8) | (c >> 8));
 }
 
 static int clip_rect(app_debug_display_t* d, int* x, int* y, int* w, int* h)
@@ -120,7 +121,8 @@ void app_debug_display_show_gray(app_debug_display_t* d, const uint8_t* gray,
         uint16_t* dst = buf + (size_t)(oy + y) * d->width + ox;
         for (int x = 0; x < dw; x++) {
             uint32_t v = src[x / scale];
-            dst[x] = (uint16_t)(((v >> 3) << 11) | ((v >> 2) << 5) | (v >> 3));
+            uint16_t c = (uint16_t)(((v >> 3) << 11) | ((v >> 2) << 5) | (v >> 3));
+            dst[x] = (uint16_t)((c << 8) | (c >> 8));
         }
     }
 }

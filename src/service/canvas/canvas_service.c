@@ -55,12 +55,14 @@ typedef struct canvas_service_ctx_t {
 
 static canvas_service_ctx_t g_canvas;
 
+/* 输出 RGB565_SWAPPED，与 bsp_display SDL/真机面板字节序一致 */
 static uint16_t rgb888_to_rgb565(uint32_t color)
 {
     uint32_t r = (color >> 16) & 0xFFu;
     uint32_t g = (color >> 8) & 0xFFu;
     uint32_t b = color & 0xFFu;
-    return (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    uint16_t c = (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    return (uint16_t)((c << 8) | (c >> 8));
 }
 
 static void canvas_put_pixel(canvas_service_ctx_t* ctx, int x, int y)

@@ -1,12 +1,11 @@
 /* bsp_display_sdl.c — bsp_display 的 SDL3 后端实现（主窗口内多区域显示）。
  *
- * 参考 N32H762 工程的 bsp_cfg.h：显示器由 type + idx 在映射表里查到自己的
- * 硬件/区域配置。SDL 后端把映射表项解释成 arch 主窗口内的一块矩形：
- *   - 每个 (type, idx) 对应一个独立的 bsp_display 实例（可同时打开多个）；
- *   - 绘制缓存仍为 RGB565；flush 转换到 RGBX8888 staging 并标记脏区；
+ * 参考 N32H762 / SZKX SDL3_simu：
+ *   - 每个 (type, idx) 对应一个独立的 bsp_display 实例；
+ *   - draw_buffer 为 RGB565_SWAPPED（与面板 SPI / LVGL gui_display 一致）；
+ *   - flush：紧密窗口缓冲（stride=width）为真机 DMA 语义；
+ *     若缓冲 ≥ 整屏，则按全屏 stride 读（兼容 canvas / debug_display）；
  *   - 纹理上传 / RenderTexture / Present 全部由 arch 主线程完成。
- *
- * 与旧版的区别：不再创建独立 SDL 窗口，也不再假设全窗口只有一个显示器。
  */
 #include "bsp/bsp_display.h"
 #include "bsp_cfg.h"
@@ -50,7 +49,7 @@ typedef struct bsp_display_t {
     uint32_t*    stage;          /* RGBX8888 转换缓冲，整块 width*height */
     uint32_t     stage_size;
 
-    uint8_t* draw_buffer;        /* RGB565 绘制缓存 */
+    uint8_t* draw_buffer;        /* RGB565_SWAPPED 绘制缓存 */
     uint32_t draw_buffer_size;
     uint8_t  draw_buffer_owned;  /* 1: 内部 e_heap 分配；0: 外部 set 进来 */
 
@@ -65,6 +64,13 @@ typedef struct bsp_display_t {
     void (*flush_finish_cb)(bsp_display_handle_t, void*);
     void* flush_finish_ctx;
 } bsp_display_t;
+
+/* LVGL gui_display 输出 RGB565_SWAPPED（字节序与面板 SPI 一致）；
+ * 本机按 uint16 读时需先交换字节，再按 RGB565 位域转 SDL RGBX8888。 */
+static uint16_t rgb565_unswap(uint16_t c)
+{
+    return (uint16_t)((c << 8) | (c >> 8));
+}
 
 /* RGB565 -> RGBX8888（SDL 的 RGBX8888 是 R 在高字节：0xRRGGBBXX） */
 static uint32_t rgb565_to_rgbx(uint16_t c)
@@ -177,7 +183,9 @@ bsp_display_handle_t bsp_display_open(bsp_display_desc_t* desc)
     }
     memset(d, 0, sizeof(*d));
     d->map = map;
-    d->is_on = 0;
+    /* 与真机 bsp_display_ega*_open 一致：初始化完成后默认点亮，
+     * 否则 render 回调直接 return，gui_service 刷新不可见。 */
+    d->is_on = 1;
     d->brightness = 100;
 
     d->texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBX8888,
@@ -263,11 +271,12 @@ bsp_display_status_t bsp_display_fill(bsp_display_handle_t handle, uint32_t colo
         return BSP_DISPLAY_STATUS_ERROR;
     }
 
-    /* 0xRRGGBB -> RGB565 */
+    /* 0xRRGGBB -> RGB565_SWAPPED（与 gui_display / 面板字节序一致） */
     uint32_t r = (color >> 16) & 0xFFu;
     uint32_t g = (color >> 8) & 0xFFu;
     uint32_t b = color & 0xFFu;
     uint16_t c565 = (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    c565 = rgb565_unswap(c565);
 
     uint32_t pixels = (uint32_t)d->map->width * d->map->height;
     uint16_t* buf = (uint16_t*)d->draw_buffer;
@@ -315,12 +324,11 @@ uint8_t* bsp_display_get_draw_buffer(bsp_display_handle_t handle, uint32_t* buf_
 bsp_display_status_t bsp_display_set_draw_buffer(bsp_display_handle_t handle, uint8_t* draw_buffer, uint32_t buf_size)
 {
     bsp_display_t* d = (bsp_display_t*)handle;
-    if (!d || !draw_buffer) {
+    if (!d || !draw_buffer || buf_size < 2U) {
         return BSP_DISPLAY_STATUS_ERROR;
     }
-    if (buf_size < (uint32_t)d->map->width * d->map->height * 2U) {
-        return BSP_DISPLAY_STATUS_ERROR;
-    }
+    /* 与真机一致：允许局部 flush 缓冲（gui_display 按脏区宽高传入），
+     * 不再要求整屏大小。 */
     d->draw_buffer = draw_buffer;
     d->draw_buffer_size = buf_size;
     d->draw_buffer_owned = 0;
@@ -347,15 +355,38 @@ bsp_display_status_t bsp_display_flush(bsp_display_handle_t handle, uint16_t x, 
         return BSP_DISPLAY_STATUS_SUCCESS;
     }
 
+    const uint32_t full_fb_bytes = (uint32_t)disp_w * (uint32_t)disp_h * 2U;
+    const int full_fb = (d->draw_buffer_size >= full_fb_bytes);
+
+    if (full_fb) {
+        /* 全屏缓冲：按显存 stride 读局部（canvas / debug_display） */
+        if (d->draw_buffer_size < full_fb_bytes) {
+            return BSP_DISPLAY_STATUS_ERROR;
+        }
+    } else {
+        /* 紧密窗口缓冲：stride=width，与真机 DMA / LVGL 语义一致 */
+        if (d->draw_buffer_size < (uint32_t)width * (uint32_t)height * 2U) {
+            ERROR_LOG("flush buffer too small: %u < %u",
+                      (unsigned)d->draw_buffer_size,
+                      (unsigned)((uint32_t)width * height * 2U));
+            return BSP_DISPLAY_STATUS_ERROR;
+        }
+    }
+
     SDL_LockMutex(d->lock);
     d->busy = 1;
 
-    /* RGB565 -> RGBX8888，直接写进 staging 对应位置 */
+    /* RGB565_SWAPPED -> stage[x,y] */
     for (uint32_t row = 0; row < height; row++) {
-        const uint16_t* src = (const uint16_t*)(d->draw_buffer + ((size_t)(y + row) * disp_w + x) * 2);
+        const uint16_t* src;
+        if (full_fb) {
+            src = (const uint16_t*)(d->draw_buffer + ((size_t)(y + row) * disp_w + x) * 2);
+        } else {
+            src = (const uint16_t*)(d->draw_buffer + ((size_t)row * width) * 2);
+        }
         uint32_t* dst = d->stage + (size_t)(y + row) * disp_w + x;
         for (uint32_t col = 0; col < width; col++) {
-            dst[col] = rgb565_to_rgbx(src[col]);
+            dst[col] = rgb565_to_rgbx(rgb565_unswap(src[col]));
         }
     }
 
