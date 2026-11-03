@@ -125,8 +125,26 @@ typedef struct bsp_audio_system_tx_map_t {
 #ifndef BSP_AUDIO_METER_GAP
 #define BSP_AUDIO_METER_GAP         8
 #endif
-#ifndef AUDIO_SPEC_BINS
-#define AUDIO_SPEC_BINS             24
+/* 显示条：固定 10Hz 步进，覆盖 [0 .. AUDIO_SPEC_FMAX_HZ) → 200 根 */
+#ifndef AUDIO_SPEC_STEP_HZ
+#define AUDIO_SPEC_STEP_HZ          10u
+#endif
+#ifndef AUDIO_SPEC_FMAX_HZ
+#define AUDIO_SPEC_FMAX_HZ          2000u
+#endif
+#if ((AUDIO_SPEC_FMAX_HZ) % (AUDIO_SPEC_STEP_HZ)) != 0
+#error "AUDIO_SPEC_FMAX_HZ must be divisible by AUDIO_SPEC_STEP_HZ"
+#endif
+#define AUDIO_SPEC_BINS             ((AUDIO_SPEC_FMAX_HZ) / (AUDIO_SPEC_STEP_HZ))
+/* 频谱分析窗：须为 2 的幂；4096 → Δf≈10.8Hz @44.1kHz，对齐 10Hz 显示步进 */
+#ifndef AUDIO_SPEC_FFT_N
+#define AUDIO_SPEC_FFT_N            4096u
+#endif
+#if (AUDIO_SPEC_FFT_N) < (BSP_AUDIO_FRAME_SAMPLES)
+#error "AUDIO_SPEC_FFT_N must be >= BSP_AUDIO_FRAME_SAMPLES"
+#endif
+#if (AUDIO_SPEC_FFT_N & (AUDIO_SPEC_FFT_N - 1u)) != 0
+#error "AUDIO_SPEC_FFT_N must be a power of 2"
 #endif
 
 #if (BSP_AUDIO_RX_CHANNELS) > (BSP_AUDIO_RX_MAX)
@@ -256,6 +274,13 @@ static float s_spec_tx[BSP_AUDIO_TX_MAX][AUDIO_SPEC_BINS];
 static float s_spec_rx[BSP_AUDIO_RX_MAX][AUDIO_SPEC_BINS];
 static float s_pkhz_tx[BSP_AUDIO_TX_MAX];
 static float s_pkhz_rx[BSP_AUDIO_RX_MAX];
+/* 单声道环形分析缓冲：写指针指向下一写入位置 */
+static float s_spec_hist_tx[BSP_AUDIO_TX_MAX][AUDIO_SPEC_FFT_N];
+static float s_spec_hist_rx[BSP_AUDIO_RX_MAX][AUDIO_SPEC_FFT_N];
+static uint32_t s_spec_hist_pos_tx[BSP_AUDIO_TX_MAX];
+static uint32_t s_spec_hist_pos_rx[BSP_AUDIO_RX_MAX];
+static uint32_t s_spec_hist_fill_tx[BSP_AUDIO_TX_MAX];
+static uint32_t s_spec_hist_fill_rx[BSP_AUDIO_RX_MAX];
 
 /* UI */
 static audio_ui_mode_e s_ui_mode = AUDIO_UI_ENERGY;
@@ -382,73 +407,223 @@ static float calc_rms(const float* buf, uint32_t n)
     return (float)sqrt(acc / (double)n);
 }
 
-/* 简易 DFT 幅度谱（单声道）。
- * 频率定义与 DFT 一致：f = k * fs / N，k ∈ [1, N/2]。
- * 旧实现分析用 (b+1)*fs/(2B)、显示用 (b+0.5)*fs/(2B)，1kHz 会误报成 ~459Hz。 */
-static float spectrum_update(const float* interleaved, float* bins_io)
+/* 将一帧交错立体声压成单声道，写入环形分析窗。 */
+static void spec_hist_push(float* hist, uint32_t* pos, uint32_t* fill,
+                           const float* interleaved)
 {
-    const uint32_t n = BSP_AUDIO_FRAME_SAMPLES;
+    uint32_t i;
+    uint32_t p = *pos;
+    for (i = 0; i < BSP_AUDIO_FRAME_SAMPLES; i++) {
+        hist[p] = 0.5f * (interleaved[2u * i] + interleaved[2u * i + 1u]);
+        p++;
+        if (p >= AUDIO_SPEC_FFT_N) {
+            p = 0u;
+        }
+    }
+    *pos = p;
+    if (*fill < AUDIO_SPEC_FFT_N) {
+        *fill += BSP_AUDIO_FRAME_SAMPLES;
+        if (*fill > AUDIO_SPEC_FFT_N) {
+            *fill = AUDIO_SPEC_FFT_N;
+        }
+    }
+}
+
+/* 原地 radix-2 DIT FFT（n 为 2 的幂）。 */
+static void fft_radix2(float* re, float* im, uint32_t n)
+{
+    uint32_t i;
+    uint32_t j = 0u;
+    uint32_t len;
+
+    for (i = 0u; i < n - 1u; i++) {
+        uint32_t bit;
+        if (i < j) {
+            float tr = re[i];
+            float ti = im[i];
+            re[i] = re[j];
+            im[i] = im[j];
+            re[j] = tr;
+            im[j] = ti;
+        }
+        bit = n >> 1u;
+        while (j & bit) {
+            j ^= bit;
+            bit >>= 1u;
+        }
+        j ^= bit;
+    }
+
+    for (len = 2u; len <= n; len <<= 1u) {
+        uint32_t half = len >> 1u;
+        double ang = -(double)AUDIO_TWO_PI_F / (double)len;
+        double wlen_re = cos(ang);
+        double wlen_im = sin(ang);
+        uint32_t p0;
+        for (p0 = 0u; p0 < n; p0 += len) {
+            double wr = 1.0;
+            double wi = 0.0;
+            uint32_t k;
+            for (k = 0u; k < half; k++) {
+                uint32_t i0 = p0 + k;
+                uint32_t i1 = i0 + half;
+                float tr = (float)(wr * (double)re[i1] - wi * (double)im[i1]);
+                float ti = (float)(wr * (double)im[i1] + wi * (double)re[i1]);
+                float ur = re[i0];
+                float ui = im[i0];
+                re[i0] = ur + tr;
+                im[i0] = ui + ti;
+                re[i1] = ur - tr;
+                im[i1] = ui - ti;
+                {
+                    double nwr = wr * wlen_re - wi * wlen_im;
+                    wi = wr * wlen_im + wi * wlen_re;
+                    wr = nwr;
+                }
+            }
+        }
+    }
+}
+
+/*
+ * 频谱分析：
+ *   一次 FFT；显示条按 AUDIO_SPEC_STEP_HZ 从 0 步进到 AUDIO_SPEC_FMAX_HZ，段内 max-pool；
+ *   peak 在显示频段内取最大并抛物线插值。f = k * fs / N。
+ */
+static float spectrum_update(const float* hist, uint32_t write_pos, uint32_t fill,
+                             float* bins_io)
+{
+    const uint32_t n = AUDIO_SPEC_FFT_N;
     const uint32_t k_nyquist = n / 2u;
+    const uint32_t fs = BSP_AUDIO_SAMPLE_RATE_HZ;
+    static float s_re[AUDIO_SPEC_FFT_N];
+    static float s_im[AUDIO_SPEC_FFT_N];
+    static float s_mag[AUDIO_SPEC_FFT_N / 2u + 1u];
     uint32_t b;
     uint32_t i;
+    uint32_t idx;
+    uint32_t k;
+    uint32_t k_fmax;
+    uint32_t k_peak = 1u;
     float peak_mag = 0.0f;
-    float peak_hz = 0.0f;
+    float m_l;
+    float m_c;
+    float m_r;
+    double delta;
+    const float scale = 4.0f / (float)n; /* Hann 相干增益×2 + 单边×2/N */
 
-    for (b = 0; b < AUDIO_SPEC_BINS; b++) {
-        double re = 0.0;
-        double im = 0.0;
-        /* 显示条均匀映射到 DFT bin 1..N/2 */
-        double k = (AUDIO_SPEC_BINS <= 1u)
-                       ? 1.0
-                       : (1.0 + (double)b * (double)(k_nyquist - 1u) /
-                                     (double)(AUDIO_SPEC_BINS - 1u));
-        double w = (double)AUDIO_TWO_PI_F * k / (double)n;
-        float hz = (float)(k * (double)BSP_AUDIO_SAMPLE_RATE_HZ / (double)n);
-        float mag;
+    if (fill < n) {
+        return 0.0f;
+    }
 
-        for (i = 0; i < n; i++) {
-            /* Hann 窗减轻泄漏 */
-            float hann = 0.5f - 0.5f * cosf((float)AUDIO_TWO_PI_F * (float)i / (float)(n - 1u));
-            float m = 0.5f * (interleaved[2u * i] + interleaved[2u * i + 1u]) * hann;
-            re += (double)m * cos(w * (double)i);
-            im -= (double)m * sin(w * (double)i);
+    idx = write_pos;
+    for (i = 0u; i < n; i++) {
+        float hann = 0.5f - 0.5f * cosf((float)AUDIO_TWO_PI_F * (float)i / (float)(n - 1u));
+        s_re[i] = hist[idx] * hann;
+        s_im[i] = 0.0f;
+        idx++;
+        if (idx >= n) {
+            idx = 0u;
         }
-        /* 窗使相干增益约 0.5，幅度补偿 ×2；再 ×2/N 为单边谱习惯归一 */
-        mag = (float)(4.0 * sqrt(re * re + im * im) / (double)n);
-        if (mag < bins_io[b] * AUDIO_ENERGY_DECAY) {
-            mag = bins_io[b] * AUDIO_ENERGY_DECAY;
-        }
+    }
+
+    fft_radix2(s_re, s_im, n);
+
+    for (k = 0u; k <= k_nyquist; k++) {
+        float mag = scale * sqrtf(s_re[k] * s_re[k] + s_im[k] * s_im[k]);
         if (mag > 1.0f) {
             mag = 1.0f;
         }
-        bins_io[b] = mag;
-        if (mag > peak_mag) {
-            peak_mag = mag;
-            peak_hz = hz;
-        }
+        s_mag[k] = mag;
     }
 
+    /* 显示上限对应的 FFT bin（含） */
+    k_fmax = (AUDIO_SPEC_FMAX_HZ * n) / fs;
+    if (k_fmax > k_nyquist) {
+        k_fmax = k_nyquist;
+    }
+
+    /* 显示条：每条覆盖 [b*STEP, (b+1)*STEP) Hz，映射到 FFT bin 后取 max */
+    for (b = 0u; b < AUDIO_SPEC_BINS; b++) {
+        uint32_t f_lo = b * AUDIO_SPEC_STEP_HZ;
+        uint32_t f_hi = f_lo + AUDIO_SPEC_STEP_HZ;
+        uint32_t k0 = (f_lo * n) / fs;                 /* floor */
+        uint32_t k1 = (f_hi * n + fs - 1u) / fs;       /* ceil */
+        float mag = 0.0f;
+        if (k1 <= k0) {
+            k1 = k0 + 1u;
+        }
+        if (k0 > k_nyquist) {
+            bins_io[b] = bins_io[b] * AUDIO_ENERGY_DECAY;
+            continue;
+        }
+        if (k1 > k_nyquist + 1u) {
+            k1 = k_nyquist + 1u;
+        }
+        for (k = k0; k < k1; k++) {
+            if (s_mag[k] > mag) {
+                mag = s_mag[k];
+            }
+        }
+        if (mag < bins_io[b] * AUDIO_ENERGY_DECAY) {
+            mag = bins_io[b] * AUDIO_ENERGY_DECAY;
+        }
+        bins_io[b] = mag;
+    }
+
+    /* peak 跳过 DC，避免直流把读数钉在 0Hz */
+    for (k = 1u; k <= k_fmax; k++) {
+        if (s_mag[k] > peak_mag) {
+            peak_mag = s_mag[k];
+            k_peak = k;
+        }
+    }
     if (peak_mag < 0.02f) {
         return 0.0f;
     }
-    return peak_hz;
+
+    m_c = s_mag[k_peak];
+    m_l = (k_peak > 1u) ? s_mag[k_peak - 1u] : m_c;
+    m_r = (k_peak < k_fmax) ? s_mag[k_peak + 1u] : m_c;
+    delta = 0.0;
+    if ((2.0f * m_c - m_l - m_r) > 1.0e-6f) {
+        delta = 0.5 * (double)(m_r - m_l) / (double)(2.0f * m_c - m_l - m_r);
+        if (delta > 0.5) {
+            delta = 0.5;
+        }
+        if (delta < -0.5) {
+            delta = -0.5;
+        }
+    }
+    return (float)(((double)k_peak + delta) * (double)fs / (double)n);
 }
 
 static void energy_store_all(const float tx[][AUDIO_FRAME_FLOATS],
-                             const float rx[][AUDIO_FRAME_FLOATS])
+                             const float rx[][AUDIO_FRAME_FLOATS],
+                             int do_spectrum)
 {
     uint8_t i;
     for (i = 0; i < s_tx_cnt; i++) {
         float rms = calc_rms(tx[i], AUDIO_FRAME_FLOATS);
         if (rms > 1.0f) rms = 1.0f;
         SDL_SetAtomicInt(&s_energy_tx_q15[i], (int)lrintf(rms * 32767.0f));
-        s_pkhz_tx[i] = spectrum_update(tx[i], s_spec_tx[i]);
+        spec_hist_push(s_spec_hist_tx[i], &s_spec_hist_pos_tx[i],
+                       &s_spec_hist_fill_tx[i], tx[i]);
+        if (do_spectrum) {
+            s_pkhz_tx[i] = spectrum_update(s_spec_hist_tx[i], s_spec_hist_pos_tx[i],
+                                           s_spec_hist_fill_tx[i], s_spec_tx[i]);
+        }
     }
     for (i = 0; i < s_rx_cnt; i++) {
         float rms = calc_rms(rx[i], AUDIO_FRAME_FLOATS);
         if (rms > 1.0f) rms = 1.0f;
         SDL_SetAtomicInt(&s_energy_rx_q15[i], (int)lrintf(rms * 32767.0f));
-        s_pkhz_rx[i] = spectrum_update(rx[i], s_spec_rx[i]);
+        spec_hist_push(s_spec_hist_rx[i], &s_spec_hist_pos_rx[i],
+                       &s_spec_hist_fill_rx[i], rx[i]);
+        if (do_spectrum) {
+            s_pkhz_rx[i] = spectrum_update(s_spec_hist_rx[i], s_spec_hist_pos_rx[i],
+                                           s_spec_hist_fill_rx[i], s_spec_rx[i]);
+        }
     }
 }
 
@@ -540,8 +715,7 @@ static void draw_mini_energy(struct SDL_Renderer* r, float x, float y, float w, 
 static void draw_spectrum(struct SDL_Renderer* r, float x, float y, float w, float h,
                           const float* bins, int is_tx)
 {
-    float gap = 1.0f;
-    float bar_w;
+    /* 200 根 10Hz 条：无间隙铺满，按浮点边界取整避免累积缝隙 */
     uint32_t b;
     SDL_FRect bg = { x, y, w, h };
 
@@ -550,20 +724,21 @@ static void draw_spectrum(struct SDL_Renderer* r, float x, float y, float w, flo
     SDL_SetRenderDrawColor(r, 55, 62, 72, 255);
     SDL_RenderRect(r, &bg);
 
-    bar_w = (w - gap * (float)(AUDIO_SPEC_BINS + 1)) / (float)AUDIO_SPEC_BINS;
-    if (bar_w < 1.0f) {
-        bar_w = 1.0f;
-    }
     for (b = 0; b < AUDIO_SPEC_BINS; b++) {
         float mag = bins[b];
+        float x0 = x + 1.0f + ((w - 2.0f) * (float)b) / (float)AUDIO_SPEC_BINS;
+        float x1 = x + 1.0f + ((w - 2.0f) * (float)(b + 1u)) / (float)AUDIO_SPEC_BINS;
         float bh;
         SDL_FRect bar;
         if (mag < 0.0f) mag = 0.0f;
         if (mag > 1.0f) mag = 1.0f;
         bh = (h - 4.0f) * mag;
-        bar.x = x + gap + (float)b * (bar_w + gap);
+        bar.x = x0;
         bar.y = y + h - 2.0f - bh;
-        bar.w = bar_w;
+        bar.w = x1 - x0;
+        if (bar.w < 1.0f) {
+            bar.w = 1.0f;
+        }
         bar.h = bh;
         if (is_tx) {
             Uint8 g = (Uint8)(80 + (int)(mag * 140.0f));
@@ -2060,7 +2235,16 @@ static int process_one_frame(void)
         (void)rx_pull_frame(&s_rx[i], s_rx_float[i]);
     }
 
-    energy_store_all(s_tx_bank[play], s_rx_float);
+    /* 频谱 DFT 与 UI 同频 ~30Hz；每帧仍累加分析窗 + 更新 RMS */
+    now_ns = SDL_GetTicksNS();
+    {
+        int do_spectrum = (now_ns - s_last_energy_ui_ns >= AUDIO_ENERGY_UI_PERIOD_NS) ? 1 : 0;
+        energy_store_all(s_tx_bank[play], s_rx_float, do_spectrum);
+        if (do_spectrum) {
+            s_last_energy_ui_ns = now_ns;
+            arch_display_request_frame();
+        }
+    }
 
     handler = s_user_handler;
     memset(s_tx_bank[work], 0, sizeof(s_tx_bank[0]));
@@ -2089,13 +2273,6 @@ static int process_one_frame(void)
 
     s_tx_play_bank = work;
     s_frames_done++;
-
-    /* 能量条 UI 限到 ~30Hz，避免每音频帧 PushEvent 打爆主线程 */
-    now_ns = SDL_GetTicksNS();
-    if (now_ns - s_last_energy_ui_ns >= AUDIO_ENERGY_UI_PERIOD_NS) {
-        s_last_energy_ui_ns = now_ns;
-        arch_display_request_frame();
-    }
     return 0;
 }
 
@@ -2277,6 +2454,12 @@ int bsp_audio_system_init(void)
     memset(s_spec_rx, 0, sizeof(s_spec_rx));
     memset(s_pkhz_tx, 0, sizeof(s_pkhz_tx));
     memset(s_pkhz_rx, 0, sizeof(s_pkhz_rx));
+    memset(s_spec_hist_tx, 0, sizeof(s_spec_hist_tx));
+    memset(s_spec_hist_rx, 0, sizeof(s_spec_hist_rx));
+    memset(s_spec_hist_pos_tx, 0, sizeof(s_spec_hist_pos_tx));
+    memset(s_spec_hist_pos_rx, 0, sizeof(s_spec_hist_pos_rx));
+    memset(s_spec_hist_fill_tx, 0, sizeof(s_spec_hist_fill_tx));
+    memset(s_spec_hist_fill_rx, 0, sizeof(s_spec_hist_fill_rx));
     for (i = 0; i < BSP_AUDIO_TX_MAX; i++) {
         SDL_SetAtomicInt(&s_energy_tx_q15[i], 0);
     }
