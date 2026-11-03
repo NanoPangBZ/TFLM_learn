@@ -7,7 +7,7 @@
 
 #define ARCH_WINDOW_TITLE           "platform_develop (SDL3 board)"
 /* 三列：主屏320 + 编码器列120 + 音频面板288 + 间距/边距 */
-#define ARCH_WINDOW_WIDTH           760
+#define ARCH_WINDOW_WIDTH           792
 #define ARCH_WINDOW_HEIGHT          520
 
 /* 1: 窗口可拖动缩放；0: 固定大小 */

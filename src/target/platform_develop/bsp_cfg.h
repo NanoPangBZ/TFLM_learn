@@ -60,16 +60,19 @@
  * @brief bsp_audio_system 配置
  * @note 采样率 / 帧长 / 通道数编译期固定。
  *       PANEL_W：频率表与配置页共用宽度；METER_H/GAP 控制每通道表高与间距。
+ *       RX/TX_NAMES：可选通道显示名（配置页左侧列表与能量表标题）。
  */
 #define BSP_AUDIO_SAMPLE_RATE_HZ    44100u
 #define BSP_AUDIO_FRAME_SAMPLES     128u
 #define BSP_AUDIO_RX_CHANNELS       2u
 #define BSP_AUDIO_TX_CHANNELS       1u
 #define BSP_AUDIO_POLL_FREQ_HZ      500u
+#define BSP_AUDIO_TX_NAMES          { "OUT" }
+#define BSP_AUDIO_RX_NAMES          { "IN0", "IN1" }
 
 #define BSP_AUDIO_UI_X              464
 #define BSP_AUDIO_UI_Y              8
-#define BSP_AUDIO_PANEL_W           288
+#define BSP_AUDIO_PANEL_W           320
 #define BSP_AUDIO_METER_H           148
 #define BSP_AUDIO_METER_GAP         8
 
