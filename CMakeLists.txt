@@ -87,6 +87,10 @@ target_include_directories(${TFLM_APP_TARGET} PRIVATE
 )
 
 sdl3_attach(${TFLM_APP_TARGET})
+# bsp_audio_system RX DEMO：demo.wav 整段编进 exe
+embed_bin_attach(${TFLM_APP_TARGET}
+    "${CMAKE_CURRENT_LIST_DIR}/src/bsp/private/sdl/demo.wav"
+    "g_embedded_demo_wav")
 
 # 追加本目标的 app / service / 专属 bsp / test
 set(TFLM_TARGET_NEED_TTF OFF)

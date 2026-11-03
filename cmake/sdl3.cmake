@@ -40,6 +40,35 @@ function(sdl3_attach target)
     _tflm_mingw_fully_static(${target})
 endfunction()
 
+# 把任意二进制文件编进可执行文件（scripts/embed_bin.py → const unsigned char <symbol>[]）
+function(embed_bin_attach target input_file symbol_prefix)
+    if(NOT EXISTS "${input_file}")
+        message(FATAL_ERROR "embed_bin_attach: file not found: ${input_file}")
+    endif()
+
+    get_filename_component(_embed_base "${input_file}" NAME_WE)
+    set(_gen_dir "${CMAKE_BINARY_DIR}/generated")
+    set(_gen_c "${_gen_dir}/embedded_${_embed_base}.c")
+    find_program(_embed_py NAMES python python3 py)
+    if(NOT _embed_py)
+        message(FATAL_ERROR "python not found; needed to embed ${input_file}")
+    endif()
+
+    add_custom_command(
+        OUTPUT "${_gen_c}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${_gen_dir}"
+        COMMAND "${_embed_py}"
+                "${REPO_ROOT}/scripts/embed_bin.py"
+                "${input_file}"
+                "${_gen_c}"
+                "${symbol_prefix}"
+        DEPENDS "${input_file}" "${REPO_ROOT}/scripts/embed_bin.py"
+        COMMENT "Embedding ${_embed_base} into ${_gen_c}"
+        VERBATIM)
+
+    target_sources(${target} PRIVATE "${_gen_c}")
+endfunction()
+
 # SDL3_ttf（静态内置 FreeType）+ 字库二进制嵌入可执行文件
 if(NOT TARGET SDL3_ttf::SDL3_ttf-static AND NOT TARGET SDL3_ttf::SDL3_ttf)
     set(SDL3_ttf_DIR "${SDL_STATIC_PREFIX}/lib/cmake/SDL3_ttf" CACHE PATH "SDL3_ttf CMake package directory" FORCE)

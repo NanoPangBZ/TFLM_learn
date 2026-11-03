@@ -2,9 +2,10 @@
  *
  * 编译期（bsp_cfg.h）固定：采样率 / 帧长 / RX·TX 通道数。
  * 运行时（点击能量框）每路选实现类型；参数用本文件内置默认值，cfg 不配类型。
- *   RX: NONE / SYS SPK(环回) / SYS MIC / WAV / SINE
- *   TX: NONE / WAV / SYS
+ *   RX: NONE / SYS SPK(环回) / SYS MIC / FILE / DEMO / SINE
+ *   TX: NONE / FILE / SYS
  * NONE = 关闭该路。启动时全部为 NONE。
+ * RX DEMO：播构建嵌入的 demo.wav（g_embedded_demo_wav）；FILE 仍读可配置磁盘路径。
  *
  * 一帧 TX 缓存：每拍先推送上一拍 handler 结果，再拉 RX；handler 在 s_lock 外执行，
  * 长时间占用不堵推帧 / reopen。首拍输出静音。
@@ -28,6 +29,10 @@
 #include <stdio.h>
 #include <string.h>
 
+/* 由 cmake embed_bin_attach(demo.wav) 生成 */
+extern const unsigned char g_embedded_demo_wav[];
+extern const unsigned int  g_embedded_demo_wav_size;
+
 #define TAG "bsp_audio_system"
 #define INFO_LOG(...)  E_INFO_LOG(TAG, __VA_ARGS__)
 #define WARN_LOG(...)  E_WARN_LOG(TAG, __VA_ARGS__)
@@ -37,8 +42,9 @@ typedef enum rx_impl_type_e {
     RX_IMPL_TYPE_NONE = 0,
     RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK = 1, /* 系统扬声器环回 → UI: SYS SPK */
     RX_IMPL_TYPE_SYSTEM_MIC = 2,             /* 系统麦克风     → UI: SYS MIC */
-    RX_IMPL_TYPE_FILE = 3,
-    RX_IMPL_TYPE_SINE_WAVE = 4,
+    RX_IMPL_TYPE_FILE = 3,                   /* 磁盘 WAV，可配路径 */
+    RX_IMPL_TYPE_DEMO = 4,                   /* 内嵌 demo.wav */
+    RX_IMPL_TYPE_SINE_WAVE = 5,
 } rx_impl_type_e;
 
 typedef enum tx_impl_type_e {
@@ -65,6 +71,12 @@ typedef struct bsp_audio_system_rx_map_t {
             uint32_t    reserve : 31;
             uint32_t    loop_cnt;
         } file;
+        struct {
+            float    gain;
+            uint32_t loop : 1;
+            uint32_t reserve : 31;
+            uint32_t loop_cnt;
+        } demo;
         struct {
             float frequency;
             float amplitude;
@@ -994,6 +1006,7 @@ static const char* rx_type_name(rx_impl_type_e t)
         case RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK: return "SYS SPK";
         case RX_IMPL_TYPE_SYSTEM_MIC: return "SYS MIC";
         case RX_IMPL_TYPE_FILE: return "FILE";
+        case RX_IMPL_TYPE_DEMO: return "DEMO";
         case RX_IMPL_TYPE_SINE_WAVE: return "SINE";
         default: return "?";
     }
@@ -1032,6 +1045,10 @@ static void ensure_rx_type_defaults(bsp_audio_system_rx_map_t* m, rx_impl_type_e
         m->config.file.gain = AUDIO_DEFAULT_GAIN;
         m->config.file.loop = 1;
         m->config.file.loop_cnt = 0;
+    } else if (t == RX_IMPL_TYPE_DEMO) {
+        m->config.demo.gain = AUDIO_DEFAULT_GAIN;
+        m->config.demo.loop = 1;
+        m->config.demo.loop_cnt = 0;
     } else if (t == RX_IMPL_TYPE_SINE_WAVE) {
         m->config.sine_wave.frequency = AUDIO_DEFAULT_SINE_FREQ_HZ;
         m->config.sine_wave.amplitude = AUDIO_DEFAULT_SINE_AMP;
@@ -1191,12 +1208,13 @@ static void render_config_page(struct SDL_Renderer* renderer)
         }
     } else if (!is_tx_sel && ch_idx >= 0 && ch_idx < (int)s_rx_cnt) {
         bsp_audio_system_rx_map_t* d = &s_rx_draft[ch_idx];
-        const char* rx_labs[5] = { "NONE", "SPK", "MIC", "FILE", "SINE" };
-        int rx_act[5] = {
+        const char* rx_labs[6] = { "NONE", "SPK", "MIC", "FILE", "DEMO", "SINE" };
+        int rx_act[6] = {
             d->rx_impl_type == RX_IMPL_TYPE_NONE,
             d->rx_impl_type == RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK,
             d->rx_impl_type == RX_IMPL_TYPE_SYSTEM_MIC,
             d->rx_impl_type == RX_IMPL_TYPE_FILE,
+            d->rx_impl_type == RX_IMPL_TYPE_DEMO,
             d->rx_impl_type == RX_IMPL_TYPE_SINE_WAVE
         };
         float type_area_w = w - (right_x - x) - 8.0f;
@@ -1207,7 +1225,7 @@ static void render_config_page(struct SDL_Renderer* renderer)
         SDL_RenderDebugText(renderer, right_x, cy, line);
         cy += AUDIO_CFG_TITLE_H;
         cy = draw_type_btn_wrap(renderer, right_x, cy, type_area_w, btn_w, btn_h, gap,
-                                rx_labs, rx_act, 5);
+                                rx_labs, rx_act, 6);
 
         if (d->rx_impl_type == RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK ||
             d->rx_impl_type == RX_IMPL_TYPE_SYSTEM_MIC) {
@@ -1276,6 +1294,18 @@ static void render_config_page(struct SDL_Renderer* renderer)
             draw_btn(renderer, right_x + AUDIO_CFG_LOOP_BTN_X, cy - 2.0f,
                      AUDIO_CFG_LOOP_BTN_W, btn_h, "LOOP",
                      (int)d->config.file.loop);
+        } else if (d->rx_impl_type == RX_IMPL_TYPE_DEMO) {
+            snprintf(line, sizeof(line), "gain:%.2f loop:%u",
+                     (double)d->config.demo.gain, (unsigned)d->config.demo.loop);
+            SDL_SetRenderDrawColor(renderer, 180, 190, 200, 255);
+            SDL_RenderDebugText(renderer, right_x, cy, line);
+            draw_btn(renderer, right_x + AUDIO_CFG_GAIN_BTN_X0, cy - 2.0f,
+                     AUDIO_CFG_GAIN_BTN_W, btn_h, "-", 0);
+            draw_btn(renderer, right_x + AUDIO_CFG_GAIN_BTN_X1, cy - 2.0f,
+                     AUDIO_CFG_GAIN_BTN_W, btn_h, "+", 0);
+            draw_btn(renderer, right_x + AUDIO_CFG_LOOP_BTN_X, cy - 2.0f,
+                     AUDIO_CFG_LOOP_BTN_W, btn_h, "LOOP",
+                     (int)d->config.demo.loop);
         } else if (d->rx_impl_type == RX_IMPL_TYPE_SINE_WAVE) {
             snprintf(line, sizeof(line), "freq:%.0f amp:%.2f",
                      (double)d->config.sine_wave.frequency,
@@ -1461,23 +1491,9 @@ static int rx_open_mic(rx_runtime_t* rx)
     return rx_open_recording_device(rx, SDL_AUDIO_DEVICE_DEFAULT_RECORDING, "SYS MIC");
 }
 
-static int rx_open_file(rx_runtime_t* rx)
+static int rx_finish_wav_open(rx_runtime_t* rx, const char* src_label)
 {
-    const char* path = rx->map->config.file.file_path;
     SDL_AudioSpec dst;
-
-    if (!path || !path[0]) {
-        ERROR_LOG("RX file '%s': empty path", rx->map->name ? rx->map->name : "?");
-        return -1;
-    }
-
-    if (!SDL_LoadWAV(path, &rx->file_spec, &rx->file_raw, &rx->file_raw_len) || !rx->file_raw) {
-        ERROR_LOG("RX file '%s' load '%s' failed: %s",
-                  rx->map->name ? rx->map->name : "?", path, SDL_GetError());
-        rx->file_raw = NULL;
-        rx->file_raw_len = 0;
-        return -1;
-    }
 
     memset(&dst, 0, sizeof(dst));
     dst.format = SDL_AUDIO_F32;
@@ -1486,8 +1502,8 @@ static int rx_open_file(rx_runtime_t* rx)
 
     rx->stream = SDL_CreateAudioStream(&rx->file_spec, &dst);
     if (!rx->stream) {
-        ERROR_LOG("RX file '%s' create stream failed: %s",
-                  rx->map->name ? rx->map->name : "?", SDL_GetError());
+        ERROR_LOG("RX '%s' create stream failed (%s): %s",
+                  rx->map->name ? rx->map->name : "?", src_label, SDL_GetError());
         SDL_free(rx->file_raw);
         rx->file_raw = NULL;
         return -1;
@@ -1502,10 +1518,58 @@ static int rx_open_file(rx_runtime_t* rx)
         return -1;
     }
 
-    INFO_LOG("RX file '%s': '%s' %d Hz ch=%d",
+    INFO_LOG("RX '%s': %s %d Hz ch=%d",
              rx->map->name ? rx->map->name : "?",
-             path, rx->file_spec.freq, rx->file_spec.channels);
+             src_label, rx->file_spec.freq, rx->file_spec.channels);
     return 0;
+}
+
+static int rx_open_file(rx_runtime_t* rx)
+{
+    const char* path = rx->map->config.file.file_path;
+
+    if (!path || !path[0]) {
+        ERROR_LOG("RX file '%s': empty path", rx->map->name ? rx->map->name : "?");
+        return -1;
+    }
+
+    if (!SDL_LoadWAV(path, &rx->file_spec, &rx->file_raw, &rx->file_raw_len) || !rx->file_raw) {
+        ERROR_LOG("RX file '%s' load '%s' failed: %s",
+                  rx->map->name ? rx->map->name : "?", path, SDL_GetError());
+        rx->file_raw = NULL;
+        rx->file_raw_len = 0;
+        return -1;
+    }
+
+    return rx_finish_wav_open(rx, path);
+}
+
+static int rx_open_demo(rx_runtime_t* rx)
+{
+    SDL_IOStream* io;
+
+    if (g_embedded_demo_wav_size == 0u) {
+        ERROR_LOG("RX demo '%s': embedded demo.wav empty",
+                  rx->map->name ? rx->map->name : "?");
+        return -1;
+    }
+
+    io = SDL_IOFromConstMem(g_embedded_demo_wav, (size_t)g_embedded_demo_wav_size);
+    if (!io) {
+        ERROR_LOG("RX demo '%s': IOFromConstMem failed: %s",
+                  rx->map->name ? rx->map->name : "?", SDL_GetError());
+        return -1;
+    }
+    if (!SDL_LoadWAV_IO(io, true, &rx->file_spec, &rx->file_raw, &rx->file_raw_len) ||
+        !rx->file_raw) {
+        ERROR_LOG("RX demo '%s' load failed: %s",
+                  rx->map->name ? rx->map->name : "?", SDL_GetError());
+        rx->file_raw = NULL;
+        rx->file_raw_len = 0;
+        return -1;
+    }
+
+    return rx_finish_wav_open(rx, "demo.wav (embedded)");
 }
 
 static void rx_close(rx_runtime_t* rx)
@@ -1538,6 +1602,9 @@ static int rx_open_by_cfg(rx_runtime_t* rx)
     }
     if (rx->map->rx_impl_type == RX_IMPL_TYPE_FILE) {
         return rx_open_file(rx);
+    }
+    if (rx->map->rx_impl_type == RX_IMPL_TYPE_DEMO) {
+        return rx_open_demo(rx);
     }
     if (rx->map->rx_impl_type == RX_IMPL_TYPE_SINE_WAVE) {
         rx->sine_phase = 0.0f;
@@ -1656,6 +1723,9 @@ static float rx_gain_of(const rx_runtime_t* rx)
     if (rx->map->rx_impl_type == RX_IMPL_TYPE_FILE) {
         return rx->map->config.file.gain;
     }
+    if (rx->map->rx_impl_type == RX_IMPL_TYPE_DEMO) {
+        return rx->map->config.demo.gain;
+    }
     return 1.0f;
 }
 
@@ -1706,9 +1776,14 @@ static int rx_pull_stream_frame(rx_runtime_t* rx, float* dst)
         int got;
 
         if (avail < (int)sizeof(float)) {
-            if (rx->map->rx_impl_type == RX_IMPL_TYPE_FILE && !rx->file_eof) {
-                const uint8_t do_loop = (uint8_t)rx->map->config.file.loop;
-                const uint32_t loop_cnt = rx->map->config.file.loop_cnt;
+            if ((rx->map->rx_impl_type == RX_IMPL_TYPE_FILE ||
+                 rx->map->rx_impl_type == RX_IMPL_TYPE_DEMO) && !rx->file_eof) {
+                const uint8_t do_loop = (rx->map->rx_impl_type == RX_IMPL_TYPE_DEMO)
+                                            ? (uint8_t)rx->map->config.demo.loop
+                                            : (uint8_t)rx->map->config.file.loop;
+                const uint32_t loop_cnt = (rx->map->rx_impl_type == RX_IMPL_TYPE_DEMO)
+                                              ? rx->map->config.demo.loop_cnt
+                                              : rx->map->config.file.loop_cnt;
                 if (do_loop && (loop_cnt == 0u || rx->loops_done + 1u < loop_cnt)) {
                     rx->loops_done++;
                     if (rx_file_feed_stream(rx) == 0) {
@@ -1951,6 +2026,9 @@ static float* sel_gain_ptr(void)
         if (s_rx_draft[idx].rx_impl_type == RX_IMPL_TYPE_FILE) {
             return &s_rx_draft[idx].config.file.gain;
         }
+        if (s_rx_draft[idx].rx_impl_type == RX_IMPL_TYPE_DEMO) {
+            return &s_rx_draft[idx].config.demo.gain;
+        }
     }
     return NULL;
 }
@@ -2089,13 +2167,14 @@ static void ui_handle_click(float px, float py)
     } else if (!is_tx_sel && ch_idx >= 0 && ch_idx < (int)s_rx_cnt) {
         bsp_audio_system_rx_map_t* d = &s_rx_draft[ch_idx];
         float type_area_w = w - (right_x - x) - 8.0f;
-        int hit = hit_type_btn_wrap(px, py, right_x, &cy, type_area_w, btn_w, btn_h, gap, 5);
+        int hit = hit_type_btn_wrap(px, py, right_x, &cy, type_area_w, btn_w, btn_h, gap, 6);
         if (hit >= 0) {
-            static const rx_impl_type_e s_rx_types[5] = {
+            static const rx_impl_type_e s_rx_types[6] = {
                 RX_IMPL_TYPE_NONE,
                 RX_IMPL_TYPE_SYSTEM_OUTPUT_LOOPBACK,
                 RX_IMPL_TYPE_SYSTEM_MIC,
                 RX_IMPL_TYPE_FILE,
+                RX_IMPL_TYPE_DEMO,
                 RX_IMPL_TYPE_SINE_WAVE
             };
             path_edit_stop();
@@ -2173,6 +2252,13 @@ static void ui_handle_click(float px, float py)
                 point_in_rect(px, py, right_x + AUDIO_CFG_LOOP_BTN_X, cy - 2.0f,
                               AUDIO_CFG_LOOP_BTN_W, btn_h)) {
                 d->config.file.loop = d->config.file.loop ? 0u : 1u;
+                arch_display_request_frame();
+                return;
+            }
+            if (d->rx_impl_type == RX_IMPL_TYPE_DEMO &&
+                point_in_rect(px, py, right_x + AUDIO_CFG_LOOP_BTN_X, cy - 2.0f,
+                              AUDIO_CFG_LOOP_BTN_W, btn_h)) {
+                d->config.demo.loop = d->config.demo.loop ? 0u : 1u;
                 arch_display_request_frame();
                 return;
             }
